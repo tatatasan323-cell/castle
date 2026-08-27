@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>知識の泉 ── $company</title>
+<style>
+$theme
+.find{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 20px}
+.find .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
+.find .row>div{flex:1;min-width:150px}
+.find label{margin-top:0}
+.find .hint{color:var(--muted);font-size:11.5px;margin-top:10px}
+.entry{background:var(--card);border:1px solid var(--line);border-radius:12px;
+       padding:16px 20px;margin-bottom:10px}
+.entry .ess{font-size:16px;font-weight:600;line-height:1.6}
+.entry .sub{font-size:13px;color:var(--muted);margin-top:6px}
+.entry .sub b{color:var(--ink);font-weight:400}
+.entry .meta{font-size:11.5px;color:var(--muted);margin-top:11px;
+             display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.tag.判断{color:var(--bar);border-color:var(--bar)}
+.tag.失敗{color:var(--bad);border-color:var(--bad)}
+.tag.コツ{color:var(--ok);border-color:var(--ok)}
+.tag.前提{color:var(--warn);border-color:var(--warn)}
+.stale{color:var(--warn)}
+form.inline{display:inline}
+details.write{background:var(--card);border:1px solid var(--line);border-radius:12px;
+              padding:0 20px;margin-top:26px}
+details.write[open]{padding-bottom:20px}
+details.write summary{cursor:pointer;padding:16px 0;font-weight:600;font-size:14px;
+                      list-style:none;letter-spacing:.04em}
+details.write summary::-webkit-details-marker{display:none}
+details.write summary::before{content:"▸ ";color:var(--accent)}
+details.write[open] summary::before{content:"▾ "}
+.rule{background:var(--code);border:1px solid var(--line);border-radius:8px;
+      padding:12px 16px;font-size:12px;color:var(--muted);margin:8px 0 4px;line-height:1.8}
+.rule b{color:var(--ink)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.who{padding:9px 11px;border:1px solid var(--line-2);border-radius:6px;background:var(--bg)}
+.who span{color:var(--muted);font-size:11.5px}
+a{color:var(--bar)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<nav>$nav</nav>
+
+<div class="eyebrow">$company</div>
+<h1>知識の泉</h1>
+<div class="lead">
+  数字の泉が出すのは「<b>何が起きたか</b>」。ここに貯めるのは「<b>この会社で、繰り返し効くこと</b>」。<br>
+  書いたものは、その部門の数字が落ちた瞬間にダッシュボードへ出ます。<b>探しに行かなくて済みます。</b>
+</div>
+
+$message
+
+<form class="find" method="get" action="/knowledge">
+  <div class="row">
+    <div>
+      <label for="q">さがす</label>
+      <input type="search" id="q" name="q" value="$query" placeholder="言葉のかけら（ひらがな・ローマ字・略語でも）">
+    </div>
+    <div>
+      <label for="subject">部門</label>
+      <select id="subject" name="subject">$subject_options</select>
+    </div>
+    <div>
+      <label for="type">種類</label>
+      <select id="type" name="type">$type_options</select>
+    </div>
+    <div style="flex:0"><button type="submit">さがす</button></div>
+  </div>
+  <div class="hint">
+    「くらうど」「kuraudo」「ｸﾗｳﾄﾞ」「ＣＬＯＵＤ」── どれで打っても同じものに当たります。
+  </div>
+</form>
+
+$stale
+
+<h2>$heading</h2>
+$entries
+
+<details class="write" $write_open>
+<summary>知識を書く</summary>
+
+<div class="rule">
+  <b>一行で書けないものは、まだ2つ以上が混ざっています。</b>分けて2件にしてください。<br>
+  「なぜ」の無い知識は、状況が変わったときに捨ててよいか判断できません。<br>
+  「どう使うか」の無い知識は、ただの感想になります。
+</div>
+
+<form method="post" action="/knowledge">
+  <input type="hidden" name="action" value="add">
+  $supersede_field
+
+  <div class="two">
+    <div>
+      <label for="k_subject">部門</label>
+      <select id="k_subject" name="subject" required>$form_subjects</select>
+    </div>
+    <div>
+      <label for="k_type">種類</label>
+      <select id="k_type" name="type" required>$form_types</select>
+    </div>
+  </div>
+
+  <label for="essence">本質（一行・120字まで）</label>
+  <input type="text" id="essence" name="essence" maxlength="120" required
+         placeholder="例：相場高のときは数量を追わず、赤字取引を止めて粗利を守る">
+
+  <label for="why">なぜそうなのか（200字まで）</label>
+  <textarea id="why" name="why" maxlength="200" required
+            placeholder="例：農産は数量が減っても荷扱いの手間が減らない。数量を追うと人時だけ増えて粗利が沈む"></textarea>
+
+  <label for="how">どう使うか（200字まで）</label>
+  <textarea id="how" name="how" maxlength="200" required
+            placeholder="例：原価率が前月比1pt以上悪化したら、まず赤字明細を洗って止める"></textarea>
+
+  <div class="two">
+    <div>
+      <label for="tags">タグ（空白区切り・任意）</label>
+      <input type="text" id="tags" name="tags" placeholder="相場 粗利">
+    </div>
+    <div>
+      <label for="k_author">記録者</label>
+      $author_field
+    </div>
+  </div>
+
+  <div style="margin-top:16px"><button type="submit">記録する</button></div>
+</form>
+</details>
+
+</div>
+</body>
+</html>

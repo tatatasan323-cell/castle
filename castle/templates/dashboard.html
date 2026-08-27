@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>経営ステータス ── $company</title>
+<style>
+$theme
+
+/* 半透明の板。共通の見え方 */
+.landing,.voyage,.breakdown>div,.alert,section.notes .note,.spark{
+  background:var(--card);border:1px solid var(--line);border-radius:12px;
+  backdrop-filter:blur(7px);-webkit-backdrop-filter:blur(7px);
+}
+
+/* ── 着地見込み：投影の中心。ここだけ一段明るく、縁を光らせる ── */
+.landing{position:relative;background:var(--card-2);border-color:var(--line-2);
+         padding:26px 30px 22px;margin-top:18px;overflow:hidden}
+.landing::before{content:"";position:absolute;left:0;right:0;top:0;height:1px;
+                 background:linear-gradient(90deg,var(--accent),rgba(94,224,240,.15) 45%,transparent 78%);
+                 box-shadow:0 0 14px rgba(94,224,240,.5)}
+.landing .label{color:var(--muted);font-size:12px;letter-spacing:.14em}
+.landing .figure{display:flex;align-items:baseline;gap:18px;flex-wrap:wrap;margin:8px 0 2px}
+.landing .figure b{
+  font-size:54px;font-weight:600;line-height:1.05;letter-spacing:-.01em;
+  color:var(--accent);font-variant-numeric:tabular-nums;
+  text-shadow:0 0 22px rgba(94,224,240,.55), 0 0 60px rgba(94,224,240,.22);
+}
+@media (prefers-reduced-motion: no-preference){
+  /* ごく緩い明滅。投影されているものに見せるための最小限 */
+  .landing .figure b{animation:hover-glow 7s ease-in-out infinite alternate}
+  @keyframes hover-glow{
+    from{text-shadow:0 0 18px rgba(94,224,240,.42), 0 0 52px rgba(94,224,240,.16)}
+    to  {text-shadow:0 0 26px rgba(94,224,240,.62), 0 0 74px rgba(94,224,240,.28)}
+  }
+}
+.landing .figure .unit{font-size:13.5px;color:var(--muted)}
+.landing .against{display:flex;gap:36px;flex-wrap:wrap;margin-top:16px;font-size:14px;
+                  font-variant-numeric:tabular-nums}
+.landing .against div span{color:var(--muted);font-size:11.5px;letter-spacing:.07em;display:block}
+.landing .progress{margin-top:22px}
+.landing .track{height:6px;background:rgba(4,10,16,.6);border:1px solid var(--line);
+                border-radius:3px;display:flex;overflow:hidden}
+.landing .track i{display:block;height:100%}
+.landing .track .done{background:var(--accent);box-shadow:0 0 12px rgba(94,224,240,.6)}
+.landing .track .todo{background:repeating-linear-gradient(45deg,var(--line-2),var(--line-2) 2px,
+                      transparent 2px,transparent 7px)}
+.landing .legend{margin-top:9px}
+
+.breakdown{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:14px}
+.breakdown>div{padding:14px 17px}
+.breakdown .k{color:var(--muted);font-size:11.5px;letter-spacing:.07em}
+.breakdown .v{font-size:21px;font-weight:600;margin-top:3px;font-variant-numeric:tabular-nums;
+              text-shadow:0 0 16px rgba(94,224,240,.14)}
+.breakdown .n{color:var(--muted);font-size:11.5px;margin-top:2px}
+
+.voyage{padding:18px 20px 14px}
+
+/* タブはCSSだけで切り替える。JavaScriptは入れない（CDNが切れた日に死ぬのと同じ理由） */
+.tabs>input{position:absolute;width:0;height:0;opacity:0;pointer-events:none}
+.tabbar{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:16px}
+.tabbar label{font-size:11.5px;letter-spacing:.04em;padding:6px 15px;cursor:pointer;
+              border:1px solid var(--line);border-radius:20px;color:var(--muted);
+              transition:color .15s,border-color .15s,box-shadow .15s}
+.tabbar label:hover{color:var(--accent)}
+#ch-total:checked~.tabbar label[for="ch-total"],
+#ch-amount:checked~.tabbar label[for="ch-amount"],
+#ch-rate:checked~.tabbar label[for="ch-rate"]{
+  color:var(--accent);border-color:var(--accent-dim);box-shadow:var(--glow-soft)}
+.panel{display:none}
+#ch-total:checked~#p-total,#ch-amount:checked~#p-amount,#ch-rate:checked~#p-rate{display:block}
+
+.keys.series{margin:0 0 10px}
+.keys.series .key{cursor:default;transition:color .15s}
+.keys.series .key:hover{color:var(--ink)}
+.chart svg .s{transition:opacity .15s,stroke-width .15s}
+
+.barcell{width:26%}
+.bar{position:relative;height:10px;background:rgba(4,10,16,.6);
+     border:1px solid var(--line);border-radius:3px}
+.bar .fill{position:absolute;left:0;top:0;bottom:0;background:var(--bar);border-radius:2px;
+           box-shadow:0 0 10px rgba(94,224,240,.45)}
+.bar .target{position:absolute;top:-4px;bottom:-4px;width:1px;background:var(--warn);
+             box-shadow:0 0 8px rgba(232,184,102,.7)}
+tr.worst td{background:rgba(255,122,107,.07)}
+
+.alert{border-left:2px solid var(--bad);padding:15px 19px;margin-bottom:10px}
+.alert.mild{border-left-color:var(--warn)}
+.alert .head{font-weight:600;letter-spacing:.04em}
+.alert .tag{margin-left:9px;vertical-align:2px}
+.alert .body{font-size:13px;color:var(--muted);margin-top:6px}
+.alert .body b{color:var(--ink)}
+.alert .ask{font-size:13px;margin-top:9px}
+.attached{margin-top:13px;padding-top:11px;border-top:1px solid var(--line)}
+.attached .cap{font-size:10.5px;color:var(--accent-dim);letter-spacing:.12em;margin-bottom:6px}
+.note,.know{font-size:13px;padding:7px 0}
+.note+.note,.know+.know{border-top:1px solid var(--line)}
+.note .meta,.know .meta{color:var(--muted);font-size:11.5px}
+.know .ess{font-weight:600;margin-top:2px}
+.know .sub{color:var(--muted);font-size:12px}
+section.notes .note{padding:13px 17px;margin-bottom:8px}
+
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}
+.spark{padding:14px 17px}
+.spark .t{display:flex;justify-content:space-between;align-items:baseline;font-size:13px}
+.spark .t span{color:var(--muted);font-size:11.5px;font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+$nav
+
+<header>
+  <div class="eyebrow">$company</div>
+  <h1>経営ステータス</h1>
+  <div class="sub">$generated 時点 ／ データは $last_actual まで届いています</div>
+</header>
+
+$notice
+
+<section class="landing">$landing</section>
+
+<div class="breakdown">$breakdown</div>
+
+<section>
+  <h2>推移</h2>
+  <div class="voyage tabs">
+    <input type="radio" name="chart" id="ch-total" checked>
+    <input type="radio" name="chart" id="ch-amount">
+    <input type="radio" name="chart" id="ch-rate">
+    <div class="tabbar">
+      <label for="ch-total">航海図（今月の累計営業利益）</label>
+      <label for="ch-amount">部門別 粗利の推移</label>
+      <label for="ch-rate">部門別 粗利率の推移</label>
+    </div>
+
+    <div class="panel" id="p-total">
+      $voyage
+      <div class="keys">
+        <span><i style="background:var(--bar)"></i>実績（$actual_days営業日）</span>
+        <span><i class="dash"></i>着地までの見込み（残り$remaining_days営業日）</span>
+        <span><i style="background:var(--prior)"></i>前年同月</span>
+        <span><i style="background:var(--muted)"></i>予算</span>
+      </div>
+    </div>
+
+    <div class="panel" id="p-amount">
+      $dept_amount
+      <div class="legend">日次の粗利を7営業日の移動平均で均したもの。凡例に触れると、その部門だけが残ります。</div>
+    </div>
+
+    <div class="panel" id="p-rate">
+      $dept_rate
+      <div class="legend">粗利率は<b>月が締まった瞬間にしか動きません</b> ── 原価が月次でしか出ないため。
+        だから階段になります。日次で動かすには、原価を日次で持つ必要があります。</div>
+    </div>
+  </div>
+</section>
+
+<details class="howto">
+<summary>この画面の読み方（はじめての方へ）</summary>
+
+<h3>1. いちばん上が結論です</h3>
+<p><b>今月このまま行くと、営業利益がいくらで終わるか。</b>それだけを大きく出しています。
+実績（もう確定した日）と見込み（これからの日）を分けて表示しているので、
+<b>どこまでが事実で、どこからが予想か</b>が分かります。</p>
+
+<h3>2. 見込みの作り方</h3>
+<p>予測モデルは使っていません。<b>「前年と同じペースで残りも進んだら」</b>という比例配分だけです。</p>
+<ul>
+  <li><b>売上</b>　前年同月の残り日数ぶん × 今年の進み具合</li>
+  <li><b>人件費</b>　直近の日次平均 × 残り営業日（人時は計画で決まるため）</li>
+  <li><b>固定費</b>　月額を営業日数で割ったもの × 残り営業日</li>
+</ul>
+
+<h3>3. 航海図の見方</h3>
+<p>今月の1日目から積み上がる累計利益です。<b>線が予算の水平線より上にいれば順調</b>。
+前年の薄い線と比べれば、去年より速いか遅いかが分かります。</p>
+
+<h3>4. 売上が伸びていても、利益は落ちます</h3>
+<p>だから内訳を並べています。<b>売上・粗利率・人件費</b>のどれが動いたのか。
+打つ手はそれぞれ違います ── 営業の話か、仕入と売価の話か、シフトの話か。</p>
+
+<h3>5. 「いま手を打つこと」は、消えません</h3>
+<p>現場から説明が付いても、警告は残ります。<b>説明が付いたかどうかを決めるのは人です。</b>
+その下に、その部門の過去の知恵（知識の泉）も並びます。</p>
+
+<h3>6. この画面が言えないのは「なぜ」</h3>
+<p>どこが、どれだけ、どちら側の要因で落ちたか ── ここまでが数字で言えることです。
+<b>一番下の「この画面が答えないこと」を必ず読んでください。</b></p>
+
+</details>
+
+<section>
+  <h2>何が伸びて、何が落ちているか ── 部門別の粗利（今月の着地見込み）</h2>
+  $movement
+</section>
+
+<section>
+  <h2>いま手を打つこと</h2>
+  $alerts
+</section>
+
+<section class="notes">
+  <h2>現場からの申し送り ─ 直近30日</h2>
+  $notes
+</section>
+
+<section>
+  <h2>正常に回っているか</h2>
+  $health
+</section>
+
+<section>
+  <h2>週次の推移（完全な週のみ）</h2>
+  <div class="grid">$trends</div>
+  <div class="keys"><span><i style="background:var(--bar)"></i>当年</span>
+    <span><i style="background:var(--prior)"></i>前年同期</span>
+    <span><i style="background:var(--muted)"></i>目標</span></div>
+</section>
+
+<section class="limits">
+  <h2>この画面が答えないこと</h2>
+  <ul>$limits</ul>
+</section>
+
+<footer>$stats</footer>
+
+</div>
+</body>
+</html>

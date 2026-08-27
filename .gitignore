@@ -1,0 +1,15 @@
+# 社内のデータ側は公開しない（骨と肉の分離を、リポジトリでも守る）
+instance/data.db
+instance/data.db-wal
+instance/data.db-shm
+instance/users.json
+instance/backups/
+instance/incoming/
+instance/out/
+
+__pycache__/
+*.pyc
+
+# 内部の作業文書。個人の呼称・私的な規範・内部の意図が入っているので公開しない。
+# 公開する設計の記録は DESIGN.md（そちらには個人を特定するものを一切書かない）。
+設計方針.md

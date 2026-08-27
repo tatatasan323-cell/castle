@@ -1,0 +1,583 @@
+#!/usr/bin/env python3
+"""判定者。ループを回す前にこれを書く ── ループが収束するかは、ここが機械かどうかで決まる。
+
+  python castle/app/verify.py
+
+instance/data.db を作り直し、CSVを全部取り込み、ダッシュボードを生成して、
+「機械が正誤を言えること」だけを検査する。人の判断が要ることは検査しない（できない）。
+
+終了コード 0=全部通った / 1=落ちたものがある。
+"""
+
+import json
+import pathlib
+import subprocess
+import sqlite3
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+
+import config as config_mod
+import db
+
+PY = sys.executable
+APP = db.ROOT / "castle" / "app"
+
+RESULTS = []
+
+
+def check(name, ok, detail=""):
+    RESULTS.append((ok, name, detail))
+    print("  %s %s%s" % ("OK  " if ok else "NG  ", name, ("  ── " + detail) if detail else ""))
+    return ok
+
+
+def run(*args):
+    proc = subprocess.run([PY, *args], capture_output=True, text=True, encoding="utf-8", errors="replace")
+    return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+
+
+def _run(instance):
+    cfg = config_mod.load(instance)
+    incoming = instance / "incoming"
+
+    print("\n【1】作り直し（再現性も同時に見る）")
+    try:
+        for suffix in ("", "-wal", "-shm"):
+            (instance / ("data.db" + suffix)).unlink(missing_ok=True)
+    except PermissionError:
+        # serve.py が動いているとDBを掴んでいて消せない。実運用でも起きるので、原因を名指しする。
+        raise SystemExit(
+            "data.db を作り直せません。serve.py が動いていませんか？\n"
+            "  サーバを止めてから、もう一度 verify.py を実行してください。")
+
+    steps = [
+        ("売上", sorted(incoming.glob("A社*.csv"))),
+        ("労働時間", sorted(incoming.glob("B社*.csv"))),
+        ("部門損益", sorted(incoming.glob("C社*.csv"))),
+    ]
+    for kind, files in steps:
+        if not files:
+            check("%s のCSVが存在する" % kind, False, "instance/incoming に見つからない")
+            continue
+        code, out = run(APP / "import_csv.py", "--kind", kind, *[str(f) for f in files])
+        check("%s を取り込める（%d本）" % (kind, len(files)), code == 0, "" if code == 0 else out.strip().splitlines()[-1][:120])
+
+    conn = sqlite3.connect(instance / "data.db")
+    conn.row_factory = sqlite3.Row
+    measured = [d["name"] for d in cfg.measured()]
+
+    print("\n【2】記録の形")
+    rows = conn.execute(
+        "SELECT subject, occurred_at, json_extract(body,'$.cost') c, json_extract(body,'$.sales') s "
+        "FROM records WHERE kind='部門損益'").fetchall()
+    months = sorted({r["occurred_at"] for r in rows})
+    check("部門損益が 10部門 × 月数 で入っている", bool(rows) and len(rows) == len(cfg.departments) * len(months),
+          "%d件（部門%d × 月%d）" % (len(rows), len({r["subject"] for r in rows}), len(months)))
+    check("当月（未確定）は入っていない", bool(months) and "2026-08-01" not in months, "確定月: %s" % ", ".join(m[:7] for m in months))
+
+    print("\n【3】単位（千円のまま入れると1000分の1になる）")
+    # 間接部門は売上ゼロが正しいので、範囲を見るのは営業部門だけ
+    bad_unit = [r for r in rows if r["subject"] in measured
+                and not (100_000_000 <= (r["s"] or 0) <= 2_000_000_000)]
+    check("月次売上が 1.0億〜20億円の範囲", bool(rows) and not bad_unit,
+          "外れ %d件 例:%s %s" % (len(bad_unit), bad_unit[0]["subject"], f"{bad_unit[0]['s']:,}") if bad_unit else "")
+
+    print("\n【4】原価率")
+    rates = {}
+    for r in rows:
+        if r["subject"] not in measured:
+            continue
+        rate = (r["c"] or 0) / (r["s"] or 1)
+        rates.setdefault(r["subject"], {})[r["occurred_at"][:7]] = rate
+    flat = [v for m in rates.values() for v in m.values()]
+    check("全件が 0.70〜0.98 に収まる", flat and all(0.70 <= v <= 0.98 for v in flat),
+          "最小 %.3f / 最大 %.3f" % (min(flat), max(flat)) if flat else "0件")
+    nosan = rates.get("農産部", {})
+    check("農産部の原価率が月を追って上がっている", len(nosan) >= 2 and nosan.get("2026-06", 9) < nosan.get("2026-07", 0),
+          " → ".join("%s %.1f%%" % (m, v * 100) for m, v in sorted(nosan.items()) if m.startswith("2026")))
+
+    print("\n【5】粗利が出せる")
+    code, out = run(APP / "build_dashboard.py")
+    check("ダッシュボードが生成できる", code == 0, "" if code == 0 else out.strip().splitlines()[-1][:160])
+
+    summary_path = instance / "out" / "summary.json"
+    data = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.exists() else None
+    if not check("集計結果が summary.json に出ている", data is not None, "判定できる形で出力が要る"):
+        return report()
+
+    gross = {d: v["gross_pph"] for d, v in data["departments"].items()}
+    sales = {d: v["sales_pph"] for d, v in data["departments"].items()}
+    check("粗利/人時が全部門で正", all(v > 0 for v in gross.values()))
+    check("粗利/人時 < 売上/人時", all(gross[d] < sales[d] for d in gross))
+    order_g = [d for d, _ in sorted(gross.items(), key=lambda kv: -kv[1])]
+    order_s = [d for d, _ in sorted(sales.items(), key=lambda kv: -kv[1])]
+    check("粗利ベースと売上ベースで順位が変わる", order_g != order_s,
+          "粗利1位=%s ／ 売上1位=%s" % (order_g[0], order_s[0]))
+
+    print("\n【6】画面")
+    html = (instance / "out" / "dashboard.html").read_text(encoding="utf-8")
+    import re
+    check("未置換のテンプレート変数が無い", not re.search(r"\$\{?[a-z_]+\}?", html))
+    check("空の折れ線が無い", 'points=""' not in html and html.count("<polyline") >= 8,
+          "polyline %d本" % html.count("<polyline"))
+    check("未確定月の扱いが画面に書いてある", "推定" in html, "「推定」の語で確認")
+    # 同じ月の原価率を当てている2週を比べて「粗利率 ±0」と書くと、
+    # 「粗利率は問題ない」と読ませてしまう。算術は正しいが、表示として誤り。
+    check("動きようがない粗利率を ±0 と表示していない", "0.0pt" not in html)
+
+    print("\n【7】入口②（フォーム）── これから発生するもの")
+    try:
+        import serve
+    except Exception as exc:
+        check("serve.py が読める", False, "%s: %s" % (type(exc).__name__, exc))
+        return report()
+    check("serve.py が読める", True)
+
+    mark = conn.execute("SELECT COALESCE(MAX(id),0) FROM records").fetchone()[0]
+    before = conn.execute("SELECT COUNT(*) FROM records WHERE kind='申し送り'").fetchone()[0]
+    good = serve.add_note(conn, cfg, {"subject": "農産部", "occurred_at": "2026-08-12",
+                                      "category": "相場・仕入価格", "author": "青果課 佐藤",
+                                      "text": "北海道産の相場が高止まり。数量を絞って粗利を守っている。"})
+    conn.commit()
+    check("正しい申し送りを保存できる", good[0], good[1])
+    after = conn.execute("SELECT COUNT(*) FROM records WHERE kind='申し送り'").fetchone()[0]
+    check("骨に1件だけ増える", after == before + 1, "%d件 → %d件" % (before, after))
+
+    ng_cases = [
+        ("部門が対応表にない", {"subject": "存在しない部", "occurred_at": "2026-08-12",
+                              "category": "相場・仕入価格", "author": "誰か", "text": "テスト"}),
+        ("本文が空", {"subject": "農産部", "occurred_at": "2026-08-12",
+                     "category": "相場・仕入価格", "author": "誰か", "text": "   "}),
+        ("日付が読めない", {"subject": "農産部", "occurred_at": "きのう",
+                          "category": "相場・仕入価格", "author": "誰か", "text": "テスト"}),
+        ("区分が一覧にない", {"subject": "農産部", "occurred_at": "2026-08-12",
+                            "category": "なんとなく", "author": "誰か", "text": "テスト"}),
+    ]
+    rejected = all(not serve.add_note(conn, cfg, payload)[0] for _, payload in ng_cases)
+    check("不正な入力を4種類とも拒否する", rejected, "、".join(n for n, _ in ng_cases))
+    conn.commit()
+
+    # フォームがあるということは、入力が画面に出るということ。ここを抜かすと自分で穴を開ける。
+    serve.add_note(conn, cfg, {"subject": "水産部", "occurred_at": "2026-08-12",
+                               "category": "その他", "author": "<script>alert(1)</script>",
+                               "text": "<img src=x onerror=alert(2)> 危険な入力のテスト"})
+    conn.commit()
+    code, out = run(APP / "build_dashboard.py")
+    check("申し送り入りでダッシュボードが生成できる", code == 0, "" if code == 0 else out.strip().splitlines()[-1][:160])
+    html2 = (instance / "out" / "dashboard.html").read_text(encoding="utf-8")
+    # 見るのは「タグとして生きているか」。エスケープ後も onerror という文字列は残るが、それは無害。
+    # 消えていないこと（&lt;script&gt; がある）も一緒に見る ── 黙って捨てる実装を通さないため。
+    check("入力がタグとして生きていない",
+          "<script" not in html2 and "<img" not in html2, "生の <script / <img がゼロ")
+    check("入力が捨てられずエスケープされている",
+          "&lt;script&gt;" in html2 and "&lt;img" in html2)
+    check("申し送りが画面に出ている", "北海道産の相場が高止まり" in html2)
+
+    form_html = serve.render_note_page(instance, conn, cfg)
+    last = conn.execute("SELECT MAX(occurred_at) FROM records WHERE kind='売上'").fetchone()[0]
+    # 既定日が「今日」だと、取り込みの遅れぶんだけ画面の外を指す。
+    check("対象日の既定が、データのある最終日になっている", ('value="%s"' % last) in form_html, last)
+
+    print("\n【8】薄いサーバ")
+    import threading, urllib.error, urllib.parse, urllib.request
+    srv = serve.make_server(instance, 0)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = "http://127.0.0.1:%d" % srv.server_address[1]
+    try:
+        for path, label in (("/", "ダッシュボード"), ("/note", "申し送りフォーム")):
+            with urllib.request.urlopen(base + path, timeout=10) as res:
+                check("GET %s が返る（%s）" % (path, label), res.status == 200, "HTTP %d" % res.status)
+
+        n0 = conn.execute("SELECT COUNT(*) FROM records WHERE kind='申し送り'").fetchone()[0]
+        form = urllib.parse.urlencode({"subject": "業務用食材部", "occurred_at": "2026-08-12",
+                                       "category": "得意先の事情", "author": "業務用課 鈴木",
+                                       "text": "盆前で休業の得意先が増え、1件あたりの配送効率が落ちている。"},
+                                      encoding="utf-8").encode()
+        req = urllib.request.Request(base + "/note", data=form, method="POST")
+        with urllib.request.urlopen(req, timeout=10) as res:
+            check("POST /note が受理される", res.status in (200, 303), "HTTP %d" % res.status)
+        n1 = conn.execute("SELECT COUNT(*) FROM records WHERE kind='申し送り'").fetchone()[0]
+        check("POST で骨に1件増える", n1 == n0 + 1, "%d件 → %d件" % (n0, n1))
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    print("\n【9】認証と操作者の記録")
+    try:
+        import users
+    except Exception as exc:
+        check("users.py が読める", False, "%s: %s" % (type(exc).__name__, exc))
+        return report()
+    check("users.py が読める", True)
+
+    store = instance / "users.json"
+    backup = store.read_bytes() if store.exists() else None
+    store.unlink(missing_ok=True)
+    try:
+        token = users.issue(instance, "検査用 太郎")
+        check("トークンを発行できる", isinstance(token, str) and len(token) >= 32, "%d文字" % len(token))
+        raw = store.read_text(encoding="utf-8")
+        # 保管はハッシュだけ。ファイルが流出しても、それだけでは入れない。
+        check("users.json に平文トークンが入っていない", token not in raw)
+        check("正しいトークンで本人が引ける", users.resolve(instance, token) == "検査用 太郎")
+        check("誤ったトークンは通らない",
+              users.resolve(instance, "x" * len(token)) is None and users.resolve(instance, "") is None)
+
+        srv2 = serve.make_server(instance, 0)
+        threading.Thread(target=srv2.serve_forever, daemon=True).start()
+        base2 = "http://127.0.0.1:%d" % srv2.server_address[1]
+        try:
+            import http.cookiejar
+            jar = http.cookiejar.CookieJar()
+            opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+
+            with opener.open(base2 + "/note", timeout=10) as res:
+                landed = res.read().decode("utf-8", "replace")
+            check("未認証で /note を開くとログイン画面になる",
+                  "アクセスキー" in landed and "<textarea" not in landed)
+
+            bad = urllib.parse.urlencode({"token": "y" * 40}).encode()
+            try:
+                with opener.open(urllib.request.Request(base2 + "/login", data=bad), timeout=10) as res:
+                    body = res.read().decode("utf-8", "replace")
+                    status = res.status
+            except urllib.error.HTTPError as err:
+                body, status = err.read().decode("utf-8", "replace"), err.code
+            check("誤ったキーではログインできない", status == 401 and "アクセスキー" in body, "HTTP %d" % status)
+
+            ok_form = urllib.parse.urlencode({"token": token}).encode()
+            with opener.open(urllib.request.Request(base2 + "/login", data=ok_form), timeout=10) as res:
+                check("正しいキーでログインできる", res.status == 200, "HTTP %d" % res.status)
+            cookies = {c.name: c for c in jar}
+            biscuit = cookies.get("castle_key")
+            check("Cookie に HttpOnly と SameSite が付いている",
+                  biscuit is not None
+                  and biscuit.has_nonstandard_attr("HttpOnly")
+                  and (biscuit.get_nonstandard_attr("SameSite") or "").lower() == "strict")
+
+            n0 = conn.execute("SELECT COUNT(*) FROM records WHERE kind='申し送り'").fetchone()[0]
+            post = urllib.parse.urlencode({"subject": "水産部", "occurred_at": "2026-08-12",
+                                           "category": "天候・入荷", "author": "なりすまし 花子",
+                                           "text": "認証後は created_by が自己申告ではなくなるかの確認。"},
+                                          encoding="utf-8").encode()
+            with opener.open(urllib.request.Request(base2 + "/note", data=post), timeout=10) as res:
+                check("認証済みなら申し送りを書ける", res.status == 200, "HTTP %d" % res.status)
+            n1 = conn.execute("SELECT COUNT(*) FROM records WHERE kind='申し送り'").fetchone()[0]
+            who = conn.execute(
+                "SELECT created_by FROM records WHERE kind='申し送り' ORDER BY id DESC LIMIT 1").fetchone()
+            check("記録が1件増える", n1 == n0 + 1, "%d件 → %d件" % (n0, n1))
+            # 認証を入れる意味はここ。名乗りではなく、鍵の持ち主が記録される。
+            check("操作者が自己申告ではなく登録名になる",
+                  who and who[0] == "検査用 太郎", "created_by = %s" % (who[0] if who else "—"))
+
+            users.revoke(instance, "検査用 太郎")
+            with opener.open(base2 + "/note", timeout=10) as res:
+                after_revoke = res.read().decode("utf-8", "replace")
+            check("失効させたキーは通らなくなる", "アクセスキー" in after_revoke)
+        finally:
+            srv2.shutdown()
+            srv2.server_close()
+
+        store.unlink(missing_ok=True)
+        refused = serve.guard_exposure(instance, "0.0.0.0")
+        check("利用者0人のまま外向きに開こうとしたら止める", refused is not None, str(refused or "")[:80])
+        check("127.0.0.1 なら利用者0人でも動く", serve.guard_exposure(instance, "127.0.0.1") is None)
+        users.issue(instance, "門番テスト")
+        # 鍵が1本あるだけで外に出さない。打ち間違いやコピペで社内網に出るのを止める。
+        check("利用者がいても --expose なしでは外に開かない",
+              serve.guard_exposure(instance, "0.0.0.0") is not None)
+        check("--expose を明示すれば開ける",
+              serve.guard_exposure(instance, "0.0.0.0", True) is None)
+    finally:
+        store.unlink(missing_ok=True)
+        if backup is not None:
+            store.write_bytes(backup)
+
+    print("\n【10】バックアップと復旧")
+    try:
+        import backup
+    except Exception as exc:
+        check("backup.py が読める", False, "%s: %s" % (type(exc).__name__, exc))
+        return report()
+    check("backup.py が読める", True)
+    kept_before = set(backup.listing(instance))
+
+    # 委細：WALでは、コミット済みでもまだ data.db 本体に書かれていない行がある。
+    # data.db をファイルコピーしただけのバックアップは、この行を取りこぼす。
+    live = sqlite3.connect(instance / "data.db")
+    live.execute(
+        "INSERT INTO records(kind,occurred_at,subject,status,created_by,updated_at,body)"
+        " VALUES('検査用','2026-08-12','水産部','confirmed','検査',datetime('now'),'{}')")
+    live.commit()
+    expected = live.execute("SELECT COUNT(*) FROM records").fetchone()[0]
+
+    made = backup.create(instance)
+    check("バックアップが作れる", made["path"].exists(), made["path"].name)
+    check("整合性検査が通る", made["integrity"] == "ok", made["integrity"])
+    check("WALに未反映の行も取りこぼさない", made["records"] == expected,
+          "原本 %d件 / 控え %d件" % (expected, made["records"]))
+    live.close()
+
+    refused = backup.restore(instance, made["path"], yes=False)
+    check("--yes なしでは復旧しない", refused["done"] is False, refused["message"][:60])
+
+    # 復旧が正しいかを見るために、原本をわざと壊す
+    live = sqlite3.connect(instance / "data.db")
+    live.execute("DELETE FROM records WHERE kind='検査用'")
+    live.commit()
+    broken = live.execute("SELECT COUNT(*) FROM records").fetchone()[0]
+    live.close()
+    check("壊した状態を作れた", broken == expected - 1, "%d件" % broken)
+
+    before_files = set(backup.listing(instance))
+    done = backup.restore(instance, made["path"], yes=True)
+    check("復旧できる", done["done"], done["message"][:70])
+    live = sqlite3.connect(instance / "data.db")
+    check("中身が戻る", live.execute("SELECT COUNT(*) FROM records").fetchone()[0] == expected)
+    live.close()
+    # 復旧そのものを取り消せるようにする。これが無いと、間違った控えを戻した時点で終わる。
+    check("復旧の直前に、いまのDBが自動で退避される",
+          len(set(backup.listing(instance)) - before_files) == 1)
+
+    kept = backup.prune(instance, keep=1, yes=False)
+    check("--yes なしでは古い控えを消さない", kept["deleted"] == 0 and len(backup.listing(instance)) >= 2,
+          kept["message"][:60])
+
+    print("\n【13】経営者の一枚 ── 儲かっているか、着地はどうか")
+    try:
+        import pnl
+    except Exception as exc:
+        check("pnl.py が読める", False, "%s: %s" % (type(exc).__name__, exc))
+        return report()
+    check("pnl.py が読める", True)
+
+    monthly = conn.execute(
+        "SELECT subject, occurred_at, json_extract(body,'$.labor') l, json_extract(body,'$.sga') s "
+        "FROM records WHERE kind='部門損益'").fetchall()
+    check("部門損益が全10部門ぶん入っている（間接部門も）",
+          bool(monthly) and len({r["subject"] for r in monthly}) == len(cfg.departments),
+          "%d部門 × %d月" % (len({r["subject"] for r in monthly}), len({r["occurred_at"] for r in monthly})))
+    check("間接部門にも人件費が載っている",
+          bool(monthly) and all((r["l"] or 0) > 0 for r in monthly if r["subject"] == "物流センター"))
+
+    book = pnl.build(conn, cfg)
+    days = book["days"]
+    check("日次の営業利益が組み立つ", bool(days), "%d日ぶん" % len(days))
+    sample = days[-1] if days else {}
+    # 人件費は勤怠（日次人時）× 会計（月次単価）で日次化する。ここが2サイロの掛け算。
+    check("人件費が日次に落ちている", bool(days) and sample["labor"] > 0,
+          "最終日 %s: 人件費 %s円" % (sample.get("date"), format(sample.get("labor", 0), ",.0f")))
+    check("営業利益 = 売上 − 原価 − 人件費 − その他販管費",
+          bool(days) and abs(sample["op"] - (sample["sales"] - sample["cost"] - sample["labor"] - sample["sga"])) < 1)
+
+    month = book["month"]
+    check("当月の実績累計が出る", month["actual_days"] > 0, "%d営業日ぶん" % month["actual_days"])
+    check("残営業日を数えている", month["remaining_days"] >= 0, "残り %d日" % month["remaining_days"])
+    # 着地は「実績＋見込み」。残りがあるなら実績を下回らない。
+    check("着地見込みが実績累計以上", month["forecast_op"] >= month["actual_op"],
+          "実績 %s → 着地 %s" % (format(month["actual_op"], ",.0f"), format(month["forecast_op"], ",.0f")))
+    check("予算比が出る", month["vs_budget"] is not None,
+          "%+.1f%%" % month["vs_budget"] if month["vs_budget"] is not None else "")
+    check("前年同月比が出る", month["vs_last_year"] is not None,
+          "%+.1f%%" % month["vs_last_year"] if month["vs_last_year"] is not None else "")
+    check("累計の時系列がある（航海図の材料）",
+          len(month["cumulative"]) == month["actual_days"] + month["remaining_days"],
+          "%d点" % len(month["cumulative"]))
+    check("前年同月の累計も並ぶ", any(v is not None for v in month["last_year_cumulative"]))
+
+    code, out = run(APP / "build_dashboard.py")
+    check("経営者の一枚が生成できる", code == 0, "" if code == 0 else out.strip().splitlines()[-1][:160])
+    top = (instance / "out" / "dashboard.html").read_text(encoding="utf-8")
+    # 画面のいちばん上が着地見込みでないと、経営者の一枚にならない。
+    # 文字数で測ると見た目を足すたびに壊れる。**順序**で測る。
+    body_top = top[top.index("<body"):]
+    check("画面の先頭が着地見込みになっている",
+          body_top.index("着地見込み") < body_top.index("推移")
+          and body_top.index("着地見込み") < body_top.index("何が伸びて"),
+          "landing → 推移 → 部門別 の順")
+    # どこまでが事実で、どこからが予想か。これが分からない着地見込みは危ない。
+    block = top[top.index('class="landing"'):top.index("</section>", top.index('class="landing"'))]
+    check("実績と見込みの日数が、着地の真下で分かれている",
+          all(w in block for w in ("実績", "見込み", "営業日")),
+          "landing 内で確認")
+    check("航海図（累計の折れ線）がある", 'class="voyage' in top)
+    # 外部ライブラリを入れないのと同じ理由でJavaScriptも入れない。
+    # タブ切り替えもホバー強調も、CSSの :checked と :hover だけで作る。
+    check("JavaScriptが1行も無い", "<script" not in top and "onclick" not in top)
+    check("推移の切り替えが3枚ある（全社／部門別の額／部門別の率）",
+          top.count('class="panel"') == 3, "CSSタブ")
+    check("部門別の線が部門数ぶん引かれている",
+          top.count('class="s s') >= len(measured) * 2, "%d本" % top.count('class="s s'))
+    check("人時生産性は下に格下げされている",
+          "人時生産性" in top and top.index("着地見込み") < top.index("人時生産性"))
+
+    print("\n【12】知識の泉 ── 本質を、引ける形で貯める")
+    try:
+        import knowledge
+    except Exception as exc:
+        check("knowledge.py が読める", False, "%s: %s" % (type(exc).__name__, exc))
+        return report()
+    check("knowledge.py が読める", True)
+
+    base = {"subject": "農産部", "type": "判断", "author": "農産部長 田中",
+            "essence": "相場高のときは数量を追わず、赤字取引を止めて粗利を守る",
+            "why": "農産は数量が減っても荷扱いの手間が減らない。数量を追うと人時だけ増えて粗利が沈む",
+            "how": "原価率が前月比1pt以上悪化したら、まず赤字明細を洗って止める"}
+    first = knowledge.add(conn, cfg, dict(base))
+    conn.commit()
+    check("知識を保存できる", first["ok"], first["message"][:50])
+
+    # 一行で書けないものは、まだ2つ以上が混ざっている。ここで止めるのが整理整頓の本体。
+    rejects = [
+        ("本質が長すぎる", dict(base, essence="あ" * 121)),
+        ("本質が空", dict(base, essence="  ")),
+        ("なぜが無い", dict(base, why="")),
+        ("どう使うかが無い", dict(base, how="")),
+        ("種類が4つ以外", dict(base, type="雑感")),
+        ("部門が対応表にない", dict(base, subject="存在しない部")),
+    ]
+    bad = [name for name, payload in rejects if knowledge.add(conn, cfg, dict(payload))["ok"]]
+    check("整理されていない入力を6種類とも拒否する", not bad, "通ってしまった: " + "、".join(bad) if bad else "")
+    conn.commit()
+
+    knowledge.add(conn, cfg, dict(base, subject="水産部", type="コツ",
+                                  essence="クラウド発注は前日17時までに締める",
+                                  why="17時を過ぎると翌朝の積み込みに間に合わない",
+                                  how="16時半にリマインドを出す"))
+    conn.commit()
+    for query, label in [("くらうど", "ひらがな"), ("kuraudo", "ローマ字"),
+                         ("ｸﾗｳﾄﾞ", "半角カナ"), ("ＣＬＯＵＤ", "全角英字")]:
+        hits = knowledge.search(conn, query, cfg.search_readings)
+        check("検索が%sで引ける（%s）" % (label, query), len(hits) >= 1, "%d件" % len(hits))
+
+    # 上書き原則：旧決定と新決定を並存させない。並存は「忘れる」より危険な記憶違いを生む。
+    old_id = knowledge.active(conn, subject="農産部")[0]["id"]
+    knowledge.add(conn, cfg, dict(base, essence="相場高でも定番だけは数量を維持する",
+                                  why="定番を切らすと棚を失い、相場が戻っても戻らない",
+                                  how="定番リストの品目は赤字でも止めない", supersedes=old_id))
+    conn.commit()
+    live_ids = [r["id"] for r in knowledge.active(conn, subject="農産部")]
+    check("覆した古い知識は現役から外れる", old_id not in live_ids, "現役 %d件" % len(live_ids))
+    gone = conn.execute("SELECT status FROM records WHERE id=?", (old_id,)).fetchone()
+    # 消さないのが要点。なぜ覆ったかが、いちばん学びになる。
+    check("覆っても消さずに残す", gone is not None and gone[0] == "superseded", gone[0] if gone else "消えた")
+
+    stale = knowledge.stale(conn, days=0)
+    check("見直されていない知識を棚卸しに出せる", len(stale) >= 1, "%d件" % len(stale))
+
+    code, out = run(APP / "build_dashboard.py")
+    check("知識入りでダッシュボードが生成できる", code == 0, "" if code == 0 else out.strip().splitlines()[-1][:160])
+    html3 = (instance / "out" / "dashboard.html").read_text(encoding="utf-8")
+    # 探しに行かせない。落ち込んだ瞬間に、その部門の知識が同じ画面に出る。
+    check("要確認の隣に、その部門の知識が出る", "相場高でも定番だけは数量を維持する" in html3)
+    check("覆った古い知識は画面に出ない", "赤字取引を止めて粗利を守る" not in html3)
+
+    page = serve.render_knowledge_page(conn, cfg, "検査用 太郎", {"q": "くらうど"})
+    check("知識の画面が検索結果を出せる", "クラウド発注は前日17時までに締める" in page)
+    check("記録者は名乗らせない（鍵で確認済みと表示）", "アクセスキーで確認済み" in page)
+
+    # 全部が今日の記録では棚卸しは出ない（それが正しい）。実際に古い1件を作って確かめる。
+    fresh = serve.render_knowledge_page(conn, cfg, None)
+    check("見直したてなら棚卸しの呼びかけは出ない", "見直されていません" not in fresh)
+    aged = knowledge.active(conn, subject="水産部")[0]
+    aged_body = knowledge.body_of(aged)
+    aged_body["reviewed_at"] = "2024-01-01"
+    conn.execute("UPDATE records SET body=? WHERE id=?",
+                 (json.dumps(aged_body, ensure_ascii=False), aged["id"]))
+    conn.commit()
+    old_page = serve.render_knowledge_page(conn, cfg, None)
+    check("古い知識が出たら名指しで棚卸しを呼びかける", "見直されていません" in old_page,
+          "%d日以上" % knowledge.STALE_DAYS)
+    check("その知識に要見直しの印が付く", "要見直し" in old_page)
+    knowledge.review(conn, aged["id"], "検査")
+    conn.commit()
+    check("「まだ有効」を押すと棚卸しから外れる",
+          "見直されていません" not in serve.render_knowledge_page(conn, cfg, None))
+
+    knowledge.add(conn, cfg, dict(base, subject="畜産部", type="失敗",
+                                  essence="<script>alert(3)</script> 危険な入力"))
+    conn.commit()
+    run(APP / "build_dashboard.py")
+    html4 = (instance / "out" / "dashboard.html").read_text(encoding="utf-8")
+    check("知識の入力もタグとして生きていない", "<script" not in html4)
+
+    print("\n【11】利用ガイド（READMEではなく、画面の中にあること）")
+    guide_tpl = db.ROOT / "castle" / "templates" / "guide.html"
+    check("guide.html がある", guide_tpl.exists())
+
+    # 配布されるのは dashboard.html 単体。サーバが無くても読み方が読めないと意味がない。
+    standalone = (instance / "out" / "dashboard.html").read_text(encoding="utf-8")
+    check("ダッシュボード単体にも読み方が入っている", "この画面の読み方" in standalone)
+    for word in ("推定", "傾向", "単発", "内訳"):
+        check("読み方が「%s」に触れている" % word, word in standalone)
+
+    users.issue(instance, "ガイド検査")
+    srv3 = serve.make_server(instance, 0)
+    threading.Thread(target=srv3.serve_forever, daemon=True).start()
+    base3 = "http://127.0.0.1:%d" % srv3.server_address[1]
+    try:
+        with urllib.request.urlopen(base3 + "/guide", timeout=10) as res:
+            guide = res.read().decode("utf-8", "replace")
+            status = res.status
+        # 鍵を持っていない人が「鍵の貰い方」を読めないと詰む。ガイドだけは認証の外に置く。
+        check("鍵が無くても /guide が読める", status == 200 and "アクセスキー" not in guide[:400],
+              "HTTP %d" % status)
+        for word in ("取り込", "アクセスキー", "控え"):
+            check("ガイドが「%s」に触れている" % word, word in guide)
+        with urllib.request.urlopen(base3 + "/", timeout=10) as res:
+            check("ログイン画面から使い方へ行ける", '/guide' in res.read().decode("utf-8", "replace"))
+    finally:
+        srv3.shutdown()
+        srv3.server_close()
+    (instance / "users.json").unlink(missing_ok=True)
+
+    removed = conn.execute(
+        "DELETE FROM records WHERE id > ? AND kind IN ('申し送り','知識')", (mark,)).rowcount
+    conn.execute("DELETE FROM records WHERE kind='検査用'")
+    conn.commit()
+    # 判定者が出した控えは判定者が片付ける（実運用の控えには手を触れない）
+    junk = [f for f in backup.listing(instance) if f not in kept_before]
+    for path in junk:
+        path.unlink()
+    check("検査で作った控えを片付けた", not (set(backup.listing(instance)) - kept_before),
+          "%d件を削除" % len(junk))
+    conn.commit()
+    run(APP / "build_dashboard.py")
+    check("検査で入れた申し送りを片付けた", 
+          conn.execute("SELECT COUNT(*) FROM records WHERE id > ?", (mark,)).fetchone()[0] == 0,
+          "%d件を削除" % removed)
+
+    return report()
+
+
+def report():
+    ng = [r for r in RESULTS if not r[0]]
+    print("\n" + "=" * 60)
+    print("判定 %d件中 %d件が通過、%d件が未達" % (len(RESULTS), len(RESULTS) - len(ng), len(ng)))
+    for _, name, detail in ng:
+        print("   未達: %s%s" % (name, ("  ── " + detail) if detail else ""))
+    print("=" * 60 + "\n")
+    return 1 if ng else 0
+
+
+def main():
+    """認証の有無で結果が変わらないよう、判定者が users.json の状態を握る。
+
+    実運用の鍵は退避して、検査が終わったら必ず戻す。
+    判定対象の状態を判定者が握っていないと、同じコードでも結果が変わる。
+    """
+    instance = db.instance_dir()
+    store = instance / "users.json"
+    backup = store.read_bytes() if store.exists() else None
+    store.unlink(missing_ok=True)
+    try:
+        return _run(instance)
+    finally:
+        store.unlink(missing_ok=True)
+        if backup is not None:
+            store.write_bytes(backup)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
