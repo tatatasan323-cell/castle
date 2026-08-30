@@ -67,6 +67,13 @@ def _run(instance):
         code, out = run(APP / "import_csv.py", "--kind", kind, *[str(f) for f in files])
         check("%s を取り込める（%d本）" % (kind, len(files)), code == 0, "" if code == 0 else out.strip().splitlines()[-1][:120])
 
+    # 申し送りと知識はCSVから来ない。だがデモの一部なので、作り直しに含める。
+    # 「数字と現場の一行が同じ画面に並ぶ」が城の目的地であり、
+    # それが無い状態の画面は、デモとして成立しない。
+    code, out = run(instance / "seed_demo.py")
+    check("デモの種（申し送り・知識）が入る", code == 0,
+          "" if code == 0 else out.strip().splitlines()[-1][:120])
+
     conn = sqlite3.connect(instance / "data.db")
     conn.row_factory = sqlite3.Row
     measured = [d["name"] for d in cfg.measured()]
@@ -409,6 +416,11 @@ def _run(instance):
     # 外部ライブラリを入れないのと同じ理由でJavaScriptも入れない。
     # タブ切り替えもホバー強調も、CSSの :checked と :hover だけで作る。
     check("JavaScriptが1行も無い", "<script" not in top and "onclick" not in top)
+    # この城の目的地 ── 経営陣も現場も、同じ画面を見て同じ判断ができる状態。
+    check("数字と現場の一行が同じ画面に並んでいる",
+          "数量減は意図的" in html and html.count('class="attached"') > 0,
+          "申し送り %s ／ 知識の添付 %d箇所"
+          % ("あり" if "数量減は意図的" in html else "無し", html.count('class="attached"')))
     check("推移の切り替えが3枚ある（全社／部門別の額／部門別の率）",
           top.count('class="panel"') == 3, "CSSタブ")
     check("部門別の線が部門数ぶん引かれている",
@@ -456,7 +468,15 @@ def _run(instance):
         check("検索が%sで引ける（%s）" % (label, query), len(hits) >= 1, "%d件" % len(hits))
 
     # 上書き原則：旧決定と新決定を並存させない。並存は「忘れる」より危険な記憶違いを生む。
-    old_id = knowledge.active(conn, subject="農産部")[0]["id"]
+    #
+    # 覆す相手は、検査が自分で作ったものにする。active()[0] を掴むと
+    # デモの種を覆してしまい、判定が公開物を壊す側に回る。
+    OLD_ESSENCE = "相場高でも数量を落とさず棚を守る（検査用の旧決定）"
+    knowledge.add(conn, cfg, dict(base, essence=OLD_ESSENCE,
+                                  why="棚を失うと相場が戻っても取り返せないと考えていた",
+                                  how="相場に関わらず定番の発注量を維持する"))
+    conn.commit()
+    old_id = conn.execute("SELECT MAX(id) FROM records WHERE kind='知識'").fetchone()[0]
     knowledge.add(conn, cfg, dict(base, essence="相場高でも定番だけは数量を維持する",
                                   why="定番を切らすと棚を失い、相場が戻っても戻らない",
                                   how="定番リストの品目は赤字でも止めない", supersedes=old_id))
@@ -475,7 +495,7 @@ def _run(instance):
     html3 = (instance / "out" / "dashboard.html").read_text(encoding="utf-8")
     # 探しに行かせない。落ち込んだ瞬間に、その部門の知識が同じ画面に出る。
     check("要確認の隣に、その部門の知識が出る", "相場高でも定番だけは数量を維持する" in html3)
-    check("覆った古い知識は画面に出ない", "赤字取引を止めて粗利を守る" not in html3)
+    check("覆った古い知識は画面に出ない", OLD_ESSENCE not in html3)
 
     page = serve.render_knowledge_page(conn, cfg, "検査用 太郎", {"q": "くらうど"})
     check("知識の画面が検索結果を出せる", "クラウド発注は前日17時までに締める" in page)
