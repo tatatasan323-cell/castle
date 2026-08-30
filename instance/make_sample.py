@@ -201,6 +201,101 @@ def write_hours(path, rows):
     return len(rows)
 
 
+# ── 会計サイロの残り半分 ──────────────────────────────────────
+# 部門別損益だけでは営業利益までしか出ない。経営者が見るのはその先。
+# 営業外・特別・税金は部門に紐づかないので、部門列を持たない縦持ちで受ける。
+
+CRLF = chr(13) + chr(10)
+
+# 月次の営業外・特別損益（千円）。実在の企業の数字ではない
+NONOP = {
+    "受取利息": 300, "仕入割引": 12000, "雑収入": 3000,
+    "支払利息": 2500, "為替差損": 800, "減価償却費": 22000,
+}
+# 特別損益は毎月は出ない。出る月だけ入れる ── 階段が動くのを見せるため
+SPECIAL = {
+    "2026-06": {"固定資産売却益": 25000},
+    "2026-07": {"減損損失": 40000},
+    "2025-06": {"固定資産売却益": 8000},
+}
+# 月末残高（千円）。月商およそ38億の会社として置いた
+BALANCE = {
+    "現金及び預金": 1_480_000, "売掛金": 4_050_000, "棚卸資産": 1_310_000,
+    "買掛金": 3_020_000, "未払金": 480_000, "短期借入金": 2_000_000,
+}
+BALANCE_DRIFT = {                     # 6科目とも動かす。1つでも固定すると「前月比 +0.0%」が並び、壊れて見える
+    "2026-06": {"現金及び預金": 1.00, "売掛金": 0.97, "棚卸資産": 0.98,
+                "買掛金": 0.99, "未払金": 1.02, "短期借入金": 1.00},
+    "2026-07": {"現金及び預金": 0.94, "売掛金": 1.03, "棚卸資産": 1.05,
+                "買掛金": 1.02, "未払金": 0.96, "短期借入金": 0.975},   # 毎月少しずつ返している
+    "2025-06": {"現金及び預金": 1.06, "売掛金": 0.94, "棚卸資産": 0.93,
+                "買掛金": 0.96, "未払金": 1.00, "短期借入金": 1.10},
+    "2025-07": {"現金及び預金": 1.03, "売掛金": 0.96, "棚卸資産": 0.95,
+                "買掛金": 0.98, "未払金": 0.98, "短期借入金": 1.08},
+    "2025-08": {"現金及び預金": 1.01, "売掛金": 0.98, "棚卸資産": 0.97,
+                "買掛金": 1.00, "未払金": 1.01, "短期借入金": 1.05},
+}
+
+
+# 営業外も毎月同じではない。仕入割引は仕入高に連動し、支払利息は借入残に連動する。
+# 全月同額にすると画面に「前年比 +0.0%」が並び、壊れているように見える。
+NONOP_DRIFT = {
+    "2025-06": {"仕入割引": 0.93, "支払利息": 0.86}, "2025-07": {"仕入割引": 0.95, "支払利息": 0.88},
+    "2025-08": {"仕入割引": 0.96, "支払利息": 0.90}, "2026-06": {"仕入割引": 1.02, "支払利息": 1.00},
+    "2026-07": {"仕入割引": 0.98, "支払利息": 1.04},
+}
+
+
+def write_trial(months):
+    """合計残高試算表。縦持ち・千円・部門列なし。"""
+    written = 0
+    for month in months:
+        lines = ["会計システム　合計残高試算表　%s年%d月度　出力:%s"
+                 % (month[:4], int(month[5:]), month + "-10 締"),
+                 "科目,金額(千円)"]
+        drift = NONOP_DRIFT.get(month, {})
+        for name, value in NONOP.items():
+            lines.append("%s,%d" % (name, round(value * drift.get(name, 1.0))))
+        for name, value in SPECIAL.get(month, {}).items():
+            lines.append("%s,%d" % (name, value))
+        path = OUT / ("C社会計_試算表_%s.csv" % month.replace("-", ""))
+        path.write_bytes((CRLF.join(lines) + CRLF).encode("cp932"))
+        written += 1
+    return written
+
+
+def write_balance(months):
+    """月末残高。ここが「金は回るか」の材料になる。"""
+    written = 0
+    for month in months:
+        drift = BALANCE_DRIFT.get(month, {})
+        lines = ["会計システム　月末残高一覧　%s年%d月度" % (month[:4], int(month[5:])),
+                 "科目,残高(千円)"]
+        for name, value in BALANCE.items():
+            lines.append("%s,%d" % (name, round(value * drift.get(name, 1.0))))
+        path = OUT / ("C社会計_月末残高_%s.csv" % month.replace("-", ""))
+        path.write_bytes((CRLF.join(lines) + CRLF).encode("cp932"))
+        written += 1
+    return written
+
+
+def write_purchase(path, rows, issued):
+    """仕入日報。売上日報と同じ形（同じ販売管理システムから出るので）。
+
+    仕入は売上に先行して動く ── 明日売る物を今日買う。だから1営業日ずらしてある。
+    """
+    lines = ["■仕入日報　出力日:%s" % issued.strftime("%Y/%m/%d"),
+             "部門コード,部門名,計上日,仕入金額（税抜）,伝票枚数"]
+    total = 0
+    for code, name, day, sales, _slips in sorted(rows, key=lambda r: (r[2], r[0])):
+        buy = int(sales * cost_rate(code, day.strftime("%Y-%m")) * (0.94 + 0.12 * ((day.day % 7) / 6)))
+        total += buy
+        lines.append("%s,%s,%s,%d,%d" % (code, name, day.strftime("%Y/%m/%d"), buy, max(1, buy // 900_000)))
+    lines.append(",合計,,%d," % total)
+    path.write_bytes((CRLF.join(lines) + CRLF).encode("cp932"))
+    return len(rows)
+
+
 def main():
     OUT.mkdir(exist_ok=True)
     shift = datetime.timedelta(days=YOY_OFFSET)
@@ -215,8 +310,15 @@ def main():
         n1 = write_sales(OUT / ("A社販売管理_売上日報_%s.csv" % suffix), sales_rows, issued)
         n2 = write_hours(OUT / ("B社勤怠_勤務実績_%s.csv" % suffix), hours_rows)
         n3 = write_accounting(sales_rows, hours_rows, current_year)
-        print("%s: 売上 %d行(cp932) ／ 勤怠 %d行(utf-8-sig) ／ 会計 %dヶ月分(cp932・千円単位)"
-              % (suffix, n1, n2, n3))
+        n4 = write_purchase(OUT / ("A社販売管理_仕入日報_%s.csv" % suffix), sales_rows, issued)
+        months = sorted({d.strftime("%Y-%m") for _c, _n, d, _s, _x in sales_rows}
+                        - {UNSETTLED}
+                        - {m for m in {d.strftime("%Y-%m") for _c, _n, d, _s, _x in sales_rows}
+                           if len({d for _c, _n, d, _s, _x in sales_rows if d.strftime("%Y-%m") == m}) < 15})
+        n5 = write_trial(months)
+        n6 = write_balance(months)
+        print("%s: 売上 %d行 ／ 勤怠 %d行 ／ 部門損益 %dヶ月 ／ 仕入 %d行 ／ 試算表 %dヶ月 ／ 月末残高 %dヶ月"
+              % (suffix, n1, n2, n3, n4, n5, n6))
 
     print("当年 %d営業日（%s 〜 %s）／ 前年は当月末ぶんまで %d営業日" 
           % (len(current), current[0][1], current[-1][1], len(prior)))

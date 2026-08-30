@@ -51,10 +51,14 @@ def _run(instance):
             "data.db を作り直せません。serve.py が動いていませんか？\n"
             "  サーバを止めてから、もう一度 verify.py を実行してください。")
 
+    # サイロが増えたぶんだけ具体的に指す。A社*.csv では売上と仕入を取り違える。
     steps = [
-        ("売上", sorted(incoming.glob("A社*.csv"))),
+        ("売上", sorted(incoming.glob("A社*売上*.csv"))),
+        ("仕入", sorted(incoming.glob("A社*仕入*.csv"))),
         ("労働時間", sorted(incoming.glob("B社*.csv"))),
-        ("部門損益", sorted(incoming.glob("C社*.csv"))),
+        ("部門損益", sorted(incoming.glob("C社*部門別損益*.csv"))),
+        ("試算表", sorted(incoming.glob("C社*試算表*.csv"))),
+        ("残高", sorted(incoming.glob("C社*月末残高*.csv"))),
     ]
     for kind, files in steps:
         if not files:
@@ -548,7 +552,144 @@ def _run(instance):
           conn.execute("SELECT COUNT(*) FROM records WHERE id > ?", (mark,)).fetchone()[0] == 0,
           "%d件を削除" % removed)
 
+
+    print("")
+    print("【14】週次の推移 ── 良し悪しが言えているか")
+    # この節が答えるべき問いは1つ ── 「この線は、良い推移なのか悪い推移なのか」。
+    # 線が描けているかではなく、判定を言えているかを見る。
+    board = (instance / "out" / "dashboard.html").read_text(encoding="utf-8")
+    cards = json.loads((instance / "out" / "summary.json").read_text(encoding="utf-8")).get("trend_cards")
+
+    if not check("判定材料が summary.json に出ている", bool(cards), "trend_cards が要る"):
+        return report()
+
+    VERDICTS = ("要対処", "失速", "挽回中", "順調")
+
+    def judge(vs_target, momentum):
+        """判定者が持つ独立の定義。画面側の実装をコピーしない。"""
+        if vs_target < -5.0:
+            return "挽回中" if momentum >= 1.0 else "要対処"
+        if momentum <= -1.0 or (vs_target < 0 and abs(momentum) < 1.0):
+            return "失速"
+        return "順調"
+
+    check("カードが全社＋全部門ぶんある", len(cards) >= 8, "%d枚" % len(cards))
+    check("すべてのカードに判定語がある",
+          all(c.get("verdict") in VERDICTS for c in cards),
+          "、".join(sorted({str(c.get("verdict")) for c in cards})))
+    wrong = [c["name"] for c in cards if c["verdict"] != judge(c["vs_target"], c["momentum"])]
+    check("判定が定義どおりに付いている", not wrong, "定義と違う: " + "、".join(wrong))
+    check("判定が1種類に偏っていない", len({c["verdict"] for c in cards}) >= 2,
+          "全部 %s では判定が効いていない" % cards[0]["verdict"])
+    check("判定語が画面に出ている", all(v in board for v in {c["verdict"] for c in cards}))
+    # 凡例の言葉と実装の食い違いは、判定が緑でも読み手を誤らせる。
+    loose = [c["name"] for c in cards if c["verdict"] == "順調" and c["vs_target"] < 0]
+    check("凡例の言葉が判定規則と食い違っていない",
+          not (loose and "順調＝目標以上" in board),
+          "目標比マイナスでも順調と出る（%s）のに、凡例が「目標以上」と書いている" % "、".join(loose))
+
+    rank = {v: n for n, v in enumerate(VERDICTS)}
+    rest = cards[1:]
+    check("全社が先頭にある", cards[0]["name"].startswith("全社"), cards[0]["name"])
+    check("悪いほうが先に並んでいる",
+          all(rank[a["verdict"]] <= rank[b["verdict"]] for a, b in zip(rest, rest[1:])),
+          " → ".join(c["verdict"] for c in rest))
+
+    # 人が読んで見つけた穴 ── 誤差圏の部門と、大きく未達の部門が同じ言葉になっていた。
+    for a in cards:
+        for b in cards:
+            if a["vs_target"] < -10.0 and b["vs_target"] > -5.0 and a["verdict"] == b["verdict"]:
+                check("誤差圏と大きな未達を同じ判定にしていない", False,
+                      "%s(%+.1f%%) と %s(%+.1f%%) がどちらも %s"
+                      % (a["name"], a["vs_target"], b["name"], b["vs_target"], a["verdict"]))
+                break
+        else:
+            continue
+        break
+    else:
+        check("誤差圏と大きな未達を同じ判定にしていない", True)
+
+    check("目標線に数値が添えてある", board.count("目標 ") >= len(cards),
+          "%d箇所" % board.count("目標 "))
+    check("縦軸の上端と下端が読める", board.count('class="ax"') >= 2 * len(cards),
+          "%d箇所" % board.count('class="ax"'))
+    check("いつからいつまでかが読める", board.count('class="axx"') >= 2 * len(cards),
+          "%d箇所" % board.count('class="axx"'))
+    check("上に行くほど良い指標だと明記してある", "上に行くほど良い" in board)
+    check("前年と目標が違う色で描かれている",
+          "var(--prior)" in board and "var(--warn)" in board)
+
+    print("")
+    print("【15】利益の階段 ── 営業利益の先まで言えているか")
+    board = (instance / "out" / "dashboard.html").read_text(encoding="utf-8")
+    book = json.loads((instance / "out" / "summary.json").read_text(encoding="utf-8"))
+    ladder = book.get("ladder")
+
+    if not check("階段が summary.json に出ている", bool(ladder), "ladder が要る"):
+        return report()
+
+    labels = [x["label"] for x in ladder]
+    for want in ("売上総利益", "営業利益", "経常利益", "税引前当期純利益", "当期純利益"):
+        check("%s がある" % want, want in labels)
+
+    # 階段が算術的に閉じているか。表示だけそれらしく、足し算が合っていない画面は無数にある。
+    running, broken = 0.0, []
+    for step in ladder:
+        if step["sign"] == 0:
+            if abs(step["amount"] - running) > 1.0:
+                broken.append("%s（表示 %.0f ／ 積み上げ %.0f）" % (step["label"], step["amount"], running))
+        else:
+            running += step["sign"] * step["amount"]
+    check("階段の足し算が合っている", not broken, "、".join(broken))
+
+    got = {x["label"]: x["amount"] for x in ladder}
+    check("営業利益と経常利益が同じ額になっていない",
+          abs(got["営業利益"] - got["経常利益"]) > 1.0,
+          "同額なら営業外を拾えていない（段が飾りになる）")
+    check("税引後が税引前より小さい", got["当期純利益"] < got["税引前当期純利益"],
+          "%.0f → %.0f" % (got["税引前当期純利益"], got["当期純利益"]))
+    check("法人税等が概算だと画面に書いてある", "実効税率" in board)
+    check("階段が画面に出ている", all(w in board for w in ("経常利益", "当期純利益")))
+    # ゼロに符号を付けると、計算した振りに見える。
+    check("金額ゼロの段に符号を付けていない",
+          "＋0万円" not in board and "−0万円" not in board)
+
+    print("")
+    print("【16】金は回るか ── 残高と仕入")
+    cash = book.get("cash")
+    if not check("残高が summary.json に出ている", bool(cash), "cash が要る"):
+        return report()
+
+    for want in ("現預金", "売掛金", "棚卸資産", "買掛金", "未払金", "借入金"):
+        check("%s の残高がある" % want, isinstance(cash.get(want, {}).get("amount"), (int, float))
+              and cash[want]["amount"] > 0, str(cash.get(want)))
+        check("%s が画面に出ている" % want, want in board)
+
+    ccc = cash.get("ccc", {})
+    check("CCCの内訳が3本そろっている",
+          all(isinstance(ccc.get(k), (int, float)) for k in ("receivable_days", "inventory_days", "payable_days")))
+    check("CCCの足し算が合っている",
+          abs((ccc.get("receivable_days", 0) + ccc.get("inventory_days", 0)
+               - ccc.get("payable_days", 0)) - ccc.get("days", -999)) < 0.1,
+          "売掛%.1f + 棚卸%.1f − 買掛%.1f ≠ %.1f"
+          % (ccc.get("receivable_days", 0), ccc.get("inventory_days", 0),
+             ccc.get("payable_days", 0), ccc.get("days", 0)))
+    check("運転資本 = 売掛 + 棚卸 − 買掛 になっている",
+          abs(cash.get("working_capital", 0)
+              - (cash["売掛金"]["amount"] + cash["棚卸資産"]["amount"] - cash["買掛金"]["amount"])) < 1.0)
+
+    buy = cash.get("purchase", {})
+    check("仕入の実績と着地見込みが出ている",
+          buy.get("actual", 0) > 0 and buy.get("forecast", 0) > buy.get("actual", 0),
+          "実績 %.0f ／ 着地 %.0f" % (buy.get("actual", 0), buy.get("forecast", 0)))
+    check("仕入が画面に出ている", "仕入" in board)
+    check("残高が確定月のものだと画面に明記されている", "月末時点" in board)
+    rng = book.get("buy_chart_range") or []
+    check("仕入の推移が年をまたいでいない", len(rng) == 2 and rng[0][:4] == rng[1][:4],
+          "→".join(rng))
+
     return report()
+
 
 
 def report():

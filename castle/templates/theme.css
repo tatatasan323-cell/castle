@@ -14,7 +14,7 @@
   --accent:#5ee0f0;          /* 投影光。主指標と現在地にだけ */
   --accent-dim:#2f8fa2;
   --bar:#5ee0f0;
-  --prior:#3d5f6b;           /* 前年など、奥に退く線 */
+  --prior:#8a7fc0;           /* 前年。当年（シアン）と目標（琥珀）のどちらとも別の色相にする */
   --ok:#5fd6a4;
   --warn:#e8b866;
   --bad:#ff7a6b;
@@ -147,6 +147,7 @@ svg polyline{filter:drop-shadow(0 0 5px rgba(94,224,240,.40))}
               display:flex;gap:18px;flex-wrap:wrap}
 .keys i{display:inline-block;width:16px;height:2px;vertical-align:3px;margin-right:6px}
 .keys i.dash{background:repeating-linear-gradient(90deg,var(--bar),var(--bar) 3px,transparent 3px,transparent 6px)}
+.keys i.dash-warn{background:repeating-linear-gradient(90deg,var(--warn),var(--warn) 4px,transparent 4px,transparent 7px)}
 
 details.howto{padding:0 22px;margin-top:18px}
 details.howto[open]{padding-bottom:18px}

@@ -34,6 +34,14 @@ KINDS = {
     "部門損益": {"fields": {"amount": ("sales", int), "cost": ("cost", int),
                           "labor": ("labor", int), "sga": ("sga", int)},
                 "by": "C社会計", "monthly": True},
+    # 仕入は売上と同じ販売管理から出る。日次・部門別。
+    "仕入": {"fields": {"buy": ("amount", int)}, "by": "A社販売管理"},
+    # ここから下は部門に紐づかない ── 営業外・特別・税金・残高は全社のもの。
+    # 部門の対応表を引かず、科目をそのまま主語にする（free_subject）。
+    "試算表": {"fields": {"amount": ("amount", int)},
+             "by": "C社会計", "monthly": True, "free_subject": True},
+    "残高": {"fields": {"amount": ("amount", int)},
+            "by": "C社会計", "monthly": True, "free_subject": True},
 }
 
 
@@ -44,8 +52,11 @@ def import_file(conn, cfg, path, kind, batch_id):
     present = set(columns.values())
     units = table["unit_of_field"]
 
+    free = spec.get("free_subject", False)
     needed = list(spec["fields"]) + ([] if spec.get("monthly") else ["date"])
-    if [f for f in needed if f not in present] or not ({"dept", "code"} & present):
+    if free:
+        needed.append("account")
+    if [f for f in needed if f not in present] or not (free or ({"dept", "code"} & present)):
         raise SystemExit(
             "%s: 必要な列が見つかりません（要る: %s ／ 見つかった: %s）"
             % (path.name, "、".join(needed), "、".join(sorted(present)) or "なし")
@@ -70,13 +81,21 @@ def import_file(conn, cfg, path, kind, batch_id):
     for row in rows:
         cell = pick(columns, row)
         occurred_at = (period + "-01") if period else parse_date(cell.get("date", ""))
-        dept = cfg.resolve(cell.get("code", ""), cell.get("dept", ""))
 
-        if dept is None:
-            label = (cell.get("dept") or cell.get("code") or "（空欄）").strip()
-            skipped.setdefault("部門が対応表にない", {}).setdefault(label, 0)
-            skipped["部門が対応表にない"][label] += 1
-            continue
+        if free:
+            subject = (cell.get("account") or "").strip()
+            if not subject:
+                skipped.setdefault("科目が空", {}).setdefault("（空欄）", 0)
+                skipped["科目が空"]["（空欄）"] += 1
+                continue
+        else:
+            dept = cfg.resolve(cell.get("code", ""), cell.get("dept", ""))
+            if dept is None:
+                label = (cell.get("dept") or cell.get("code") or "（空欄）").strip()
+                skipped.setdefault("部門が対応表にない", {}).setdefault(label, 0)
+                skipped["部門が対応表にない"][label] += 1
+                continue
+            subject = dept["name"]
         if occurred_at is None:
             skipped.setdefault("日付が読めない", {}).setdefault(cell.get("date", "").strip() or "（空欄）", 0)
             skipped["日付が読めない"][cell.get("date", "").strip() or "（空欄）"] += 1
@@ -96,7 +115,7 @@ def import_file(conn, cfg, path, kind, batch_id):
 
         body = dict(values)
         body.update({
-            "_key": "%s|%s|%s" % (kind, occurred_at, dept["name"]),
+            "_key": "%s|%s|%s" % (kind, occurred_at, subject),
             "_batch": batch_id,
             "source": path.name,
         })
@@ -107,7 +126,7 @@ def import_file(conn, cfg, path, kind, batch_id):
                VALUES(?,?,?,?,?,?,?)
                ON CONFLICT(source_key) DO UPDATE SET
                  body=excluded.body, updated_at=excluded.updated_at, created_by=excluded.created_by""",
-            (kind, occurred_at, dept["name"], "confirmed", "import/" + spec["by"], now, json.dumps(body, ensure_ascii=False)),
+            (kind, occurred_at, subject, "confirmed", "import/" + spec["by"], now, json.dumps(body, ensure_ascii=False)),
         )
         ok += 1
         dates.append(occurred_at)

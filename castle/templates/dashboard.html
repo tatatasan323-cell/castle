@@ -54,6 +54,28 @@ $theme
               text-shadow:0 0 16px rgba(94,224,240,.14)}
 .breakdown .n{color:var(--muted);font-size:11.5px;margin-top:2px}
 
+/* 利益の階段。小計だけを明るくし、加減項目は退かせる */
+table.ladder{margin-top:14px}
+table.ladder td{font-variant-numeric:tabular-nums}
+table.ladder td.v{text-align:right;white-space:nowrap}
+table.ladder td.c{text-align:right;white-space:nowrap}
+table.ladder td.ly{color:var(--muted)}
+table.ladder td.note{color:var(--muted);font-size:11.5px}
+table.ladder tr.adj td.name{padding-left:22px;color:var(--muted)}
+table.ladder tr.adj td{font-size:12.5px}
+table.ladder tr.sub td{font-weight:600;border-top:1px solid var(--line-2)}
+table.ladder tr.sub td.v{color:var(--ink);text-shadow:0 0 14px rgba(94,224,240,.16)}
+table.ladder tr.last td{border-top:1px solid var(--accent-dim)}
+table.ladder tr.last td.v{color:var(--accent);font-size:17px;
+                          text-shadow:0 0 18px rgba(94,224,240,.45)}
+table.ladder.small td{padding:7px 10px}
+
+.cashgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;margin-top:14px}
+.panel-box{background:var(--card);border:1px solid var(--line);border-radius:12px;
+           padding:16px 19px;backdrop-filter:blur(7px);-webkit-backdrop-filter:blur(7px)}
+.panel-box h3{font-size:15px;font-weight:600;margin:0 0 6px;color:var(--accent);
+              text-shadow:var(--glow)}
+
 .voyage{padding:18px 20px 14px}
 
 /* タブはCSSだけで切り替える。JavaScriptは入れない（CDNが切れた日に死ぬのと同じ理由） */
@@ -104,6 +126,28 @@ section.notes .note{padding:13px 17px;margin-bottom:8px}
 .spark{padding:14px 17px}
 .spark .t{display:flex;justify-content:space-between;align-items:baseline;font-size:13px}
 .spark .t span{color:var(--muted);font-size:11.5px;font-variant-numeric:tabular-nums}
+.spark .now{font-size:19px;font-weight:600;font-variant-numeric:tabular-nums;margin:7px 0 3px;
+            text-shadow:0 0 14px rgba(94,224,240,.16)}
+.spark .now em{font-style:normal;font-size:11.5px;color:var(--muted);margin-left:2px}
+.spark .f{display:flex;gap:15px;font-size:11.5px;color:var(--muted);margin-top:5px;
+          font-variant-numeric:tabular-nums}
+
+/* 判定チップ。線を読ませるのではなく、良し悪しをここで言い切る */
+.chip{font-size:10.5px;letter-spacing:.1em;padding:2px 10px;border-radius:20px;
+      border:1px solid var(--line-2);white-space:nowrap}
+.chip.c1{color:var(--bad);border-color:rgba(255,122,107,.5);box-shadow:0 0 13px rgba(255,122,107,.22)}
+.chip.c2{color:var(--warn);border-color:rgba(232,184,102,.5);box-shadow:0 0 13px rgba(232,184,102,.20)}
+.chip.c3{color:var(--accent);border-color:var(--accent-dim)}
+.chip.c4{color:var(--ok);border-color:rgba(95,214,164,.45)}
+.spark.c1{border-color:rgba(255,122,107,.32)}
+
+/* 目盛り。スケールの無い線は「なんとなく上がっている」しか言えない */
+.spark svg text.ax,.spark svg text.axx{font-size:9px;fill:var(--muted);
+                                       font-variant-numeric:tabular-nums}
+.spark svg text.axt{font-size:9px;fill:var(--warn);opacity:.9;
+                    font-variant-numeric:tabular-nums}
+/* 前年は光らせない。手前で光るのは当年だけ */
+.spark svg polyline.prior{filter:none;opacity:.95}
 </style>
 </head>
 <body>
@@ -122,6 +166,26 @@ $notice
 <section class="landing">$landing</section>
 
 <div class="breakdown">$breakdown</div>
+
+<section>
+  <h2>利益の階段 ── 営業利益で止めない</h2>
+  <p class="lead">売上から当期純利益まで、どの段で増え、どの段で消えたか。
+    <b>前年同月を横に並べてあります</b> ── 「売上は伸びたのに利益は落ちた」がどこで起きたかは、段を並べて初めて言えます。</p>
+  $ladder
+</section>
+
+<section>
+  <h2>金は回るか ── 残高と現金の見込み</h2>
+  <p class="lead"><b>利益と現金は別物です。</b>売った時点で利益は立ちますが、回収するまで現金は増えません。
+    残高は<b>締まった月末時点</b>のもの（当月はまだ締まっていないため）。</p>
+  $cash
+</section>
+
+<section>
+  <h2>仕入 ── 売上の裏側で先に動く数字</h2>
+  $purchase
+  <div class="voyage">$buychart</div>
+</section>
 
 <section>
   <h2>推移</h2>
@@ -213,11 +277,17 @@ $notice
 </section>
 
 <section>
-  <h2>週次の推移（完全な週のみ）</h2>
-  <div class="grid">$trends</div>
-  <div class="keys"><span><i style="background:var(--bar)"></i>当年</span>
+  <h2>部門ごとの稼ぐ力 ── 週次の推移（完全な週のみ）</h2>
+  <p class="lead"><b>上に行くほど良い指標です</b>（粗利 ÷ 実労働時間）。点線が目標。
+    良し悪しはカード右上に言い切ってあります ──
+    <b>要対処</b>＝目標に届かず、さらに落ちている／
+    <b>失速</b>＝水準は保っているが下を向いた／
+    <b>挽回中</b>＝目標未満だが上を向いている／
+    <b>順調</b>＝目標圏を保ち、落ちていない。<b>手を打つべき順に並べています。</b></p>
+  <div class="keys"><span><i style="background:var(--accent)"></i>当年</span>
     <span><i style="background:var(--prior)"></i>前年同期</span>
-    <span><i style="background:var(--muted)"></i>目標</span></div>
+    <span><i class="dash-warn"></i>目標</span></div>
+  <div class="grid">$trends</div>
 </section>
 
 <section class="limits">

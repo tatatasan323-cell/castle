@@ -25,6 +25,7 @@ class Config:
         self.note_categories = raw.get("note_categories", [])
         self.search_readings = raw.get("search_readings", {})
         self.budget = raw.get("budget", {})
+        self.accounting = raw.get("accounting", {})
 
         self._lookup = {}
         for dept in self.departments:

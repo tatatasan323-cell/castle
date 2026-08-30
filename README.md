@@ -116,6 +116,25 @@ python castle/app/import_csv.py --list
 python castle/app/import_csv.py --undo 3
 ```
 
+## サイロは5本ある
+
+| kind | 出どころ | 粒度 | 主語 |
+|---|---|---|---|
+| 売上 | A社販売管理 | 日次 | 部門 |
+| 仕入 | A社販売管理 | 日次 | 部門 |
+| 労働時間 | B社勤怠 | 日次 | 部門 |
+| 部門損益 | C社会計 | 月次 | 部門 |
+| 試算表 | C社会計 | 月次 | **科目** |
+| 残高 | C社会計 | 月次 | **科目** |
+
+下2つは部門に紐づかない（営業外・特別・税金・残高は全社のもの）。取り込み側の `free_subject` 指定で、部門の対応表を引かずに科目名をそのまま主語にする。**骨の列は増えていない。**
+
+```
+python castle/app/import_csv.py --kind 試算表 instance/incoming/C社会計_試算表_*.csv
+python castle/app/import_csv.py --kind 残高   instance/incoming/C社会計_月末残高_*.csv
+python castle/app/import_csv.py --kind 仕入   instance/incoming/A社販売管理_仕入日報_*.csv
+```
+
 ## 入口が吸収するもの
 
 サンプルCSVは、現実がそうであるようにわざと揃えていない。

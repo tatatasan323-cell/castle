@@ -228,6 +228,123 @@ def moving_average(values, window=7):
     return out
 
 
+def ladder(book):
+    """利益の階段。営業利益で止めない ── 銀行と話すのも、株主に説明するのも経常利益から先。
+
+    段ごとに前年同月を並べる。「売上は伸びたが利益は落ちた」がどの段で起きたかは、
+    段を並べて初めて言える。
+    """
+    block = book["ladder"]
+    rows = []
+    for index, step in enumerate(block["steps"]):
+        # 起点（売上高）は加減項目ではないので符号を付けない
+        subtotal = step["sign"] == 0 or index == 0
+
+        def show(value):
+            # ゼロに符号を付けない。「−0万円」は金額ではなく、計算した振りに見える。
+            if not value:
+                return "—"
+            head = "" if subtotal else ("＋" if step["sign"] > 0 else "−")
+            return head + money(value)
+
+        cls = "sub" if step["sign"] == 0 else "adj"
+        if step["label"] == "当期純利益":
+            cls += " last"
+        # 法人税は「減れば良い」ではない ── 利益が減れば税も減る。色を付けない。
+        change = ('<span class="flat">%+.1f%%</span>' % step["vs_ly"]
+                  if step["label"] == "法人税等" and step["vs_ly"] is not None
+                  else pct(step["vs_ly"], good_high=(step["sign"] >= 0)))
+        rows.append(
+            '<tr class="%s"><td class="name">%s</td><td class="v">%s</td>'
+            '<td class="v ly">%s</td><td class="c">%s</td><td class="note">%s</td></tr>'
+            % (cls, step["label"], show(step["amount"]), show(step["last_year"]),
+               change, step["note"]))
+
+    caution = "営業外（利息・仕入割引など）は毎月出るものなので、%s の額を当てています。" % block["nonop_from"]
+    if not block["nonop_estimated"]:
+        caution = "営業外は当月の確定額です。"
+    if not block["extra_settled"]:
+        caution += "<b>特別損益は推定していません</b> ── 前月に減損があったからといって今月も出るわけがないからです。当月の確定分だけを載せ、無ければゼロのまま置きます。"
+
+    return (
+        '<table class="ladder"><thead><tr><th class="name">段</th>'
+        '<th class="v">当月の着地見込み</th><th class="v">前年同月（%s）</th>'
+        '<th class="c">前年比</th><th class="note">出どころ</th></tr></thead>'
+        "<tbody>%s</tbody></table>"
+        '<div class="legend">%s</div>' % (block["last_year_month"], "".join(rows), caution))
+
+
+# 残高は「増えたら良い」が科目ごとに逆になる。現金は増えて良く、売掛は増えると良くない。
+BALANCE_GOOD_UP = {"現預金": True, "売掛金": False, "棚卸資産": False,
+                   "買掛金": True, "未払金": True, "借入金": False}
+BALANCE_WHY = {
+    "現預金": "手元の現金", "売掛金": "まだ回収していない売上", "棚卸資産": "在庫として寝ている金",
+    "買掛金": "まだ払っていない仕入", "未払金": "まだ払っていない経費", "借入金": "返す約束のある金",
+}
+
+
+def cash(book):
+    """金は回るか。利益が出ていても現金は減る ── その理由を1枚で言い切る。"""
+    block = book["cash"]
+    if not block:
+        return '<div class="none">残高のデータがありません。</div>'
+
+    cards = []
+    for key in BALANCE_GOOD_UP:
+        item = block[key]
+        cards.append(
+            '<div><div class="k">%s</div><div class="v">%s</div>'
+            '<div class="n">%s ／ 前月比 %s</div></div>'
+            % (key, money(item["amount"]), BALANCE_WHY[key],
+               pct(item["vs_prev"], good_high=BALANCE_GOOD_UP[key])))
+
+    ccc = block["ccc"]
+    bridge = [
+        ("%s 月末の現預金" % block["as_of"], block["現預金"]["amount"], 0),
+        ("当期純利益の見込み", book["ladder"]["net"], 1),
+        ("減価償却費（現金は出ていかない）", book["ladder"]["depreciation"], 1),
+        ("運転資本の増加（売掛と在庫に化けた分）", block["working_capital_change"], -1),
+    ]
+    steps = "".join(
+        '<tr class="%s"><td class="name">%s</td><td class="v">%s</td></tr>'
+        % ("adj" if sign else "sub", label,
+           (("＋" if sign > 0 else "−") if sign else "") + money(abs(value)))
+        for label, value, sign in bridge)
+
+    return (
+        '<div class="breakdown">%s</div>'
+        '<div class="cashgrid">'
+        '<div class="panel-box"><h3>現金が戻ってくるまで %.0f日</h3>'
+        '<div class="legend">売掛の回収 %.1f日 ＋ 在庫の滞留 %.1f日 − 仕入の支払猶予 %.1f日。'
+        '<b>短いほど、同じ商売でも手元に金が残ります。</b>（%s 月末の残高で計算）</div></div>'
+        '<div class="panel-box"><h3>月末の現預金は %s の見込み</h3>'
+        '<table class="ladder small"><tbody>%s'
+        '<tr class="sub last"><td class="name">当月末の現預金（見込み）</td><td class="v">%s</td></tr>'
+        "</tbody></table>"
+        '<div class="legend"><b>利益が出ていても現金は増えません。</b>'
+        '売掛金と在庫が膨らめば、その分だけ金は寝たままです。</div></div>'
+        "</div>"
+        % ("".join(cards), ccc["days"], ccc["receivable_days"], ccc["inventory_days"],
+           ccc["payable_days"], ccc["month"], money(block["cash_end_forecast"]),
+           steps, money(block["cash_end_forecast"])))
+
+
+def purchase(book):
+    """仕入。売上の裏側で、いちばん先に動く数字。"""
+    buy = book["cash"]["purchase"]
+    return (
+        '<div class="breakdown">'
+        '<div><div class="k">今月ここまでの仕入</div><div class="v">%s</div>'
+        '<div class="n">確定した営業日ぶん</div></div>'
+        '<div><div class="k">当月の着地見込み</div><div class="v">%s</div>'
+        '<div class="n">売上と同じ「前年と同じペースなら」で伸ばしたもの</div></div>'
+        '<div><div class="k">前年同月</div><div class="v">%s</div>'
+        '<div class="n">前年比 %s</div></div>'
+        "</div>"
+        % (money(buy["actual"]), money(buy["forecast"]), money(buy["last_year"]),
+           pct(buy["vs_ly"], good_high=False)))
+
+
 def alerts(departments, trends, margin_trends, attached, threshold=5.0):
     """いま手を打つこと。
 

@@ -75,6 +75,175 @@ def month_calendar(month, weekdays):
             if (first + datetime.timedelta(days=i)).weekday() in weekdays]
 
 
+def load_free(conn, kind):
+    """部門に紐づかない記録（試算表・残高）を {年月: {科目: 金額}} で返す。"""
+    out = {}
+    for row in conn.execute(
+            "SELECT occurred_at, subject, amount FROM records WHERE kind=? AND amount IS NOT NULL",
+            (kind,)):
+        out.setdefault(row["occurred_at"][:7], {})[row["subject"]] = float(row["amount"])
+    return out
+
+
+def load_purchase(conn):
+    """仕入は日次・部門別に入っているが、金繰りで見るのは全社の合計。"""
+    out = {}
+    for row in conn.execute(
+            "SELECT occurred_at, amount FROM records WHERE kind='仕入' AND amount IS NOT NULL"):
+        out[row["occurred_at"]] = out.get(row["occurred_at"], 0.0) + float(row["amount"])
+    return out
+
+
+def _calendar_days(month):
+    year, mon = int(month[:4]), int(month[5:7])
+    first = datetime.date(year, mon, 1)
+    nxt = datetime.date(year + (mon == 12), (mon % 12) + 1, 1)
+    return (nxt - first).days
+
+
+def build_ladder(cfg, month, trial):
+    """営業利益の先。段ごとに符号を持たせ、小計は積み上げと一致させる。
+
+    **営業外と特別で扱いを変えている。**
+    営業外（利息・仕入割引など）は毎月出るものなので、当月が未確定なら直近確定月の額を当てる。
+    特別損益は非経常 ── 前月に減損があったからといって今月も出るわけがない。
+    だから当月に確定していなければ **ゼロのまま置く**。推定してよいものと、してはいけないものがある。
+    """
+    acct = cfg.accounting or {}
+    settled = sorted(m for m in trial if m < month["month"])
+    recurring_src = month["month"] if month["month"] in trial else (settled[-1] if settled else None)
+
+    def bucket(name, source):
+        if source is None:
+            return 0.0
+        return sum(trial.get(source, {}).get(n, 0.0) for n in acct.get(name, []))
+
+    nonop_in = bucket("営業外収益", recurring_src)
+    nonop_out = bucket("営業外費用", recurring_src)
+    extra_src = month["month"] if month["month"] in trial else None
+    extra_in = bucket("特別利益", extra_src)
+    extra_out = bucket("特別損失", extra_src)
+
+    def ladder_of(sales, gross, labor, sga, op, nonop_in, nonop_out, extra_in, extra_out):
+        ordinary = op + nonop_in - nonop_out
+        pretax = ordinary + extra_in - extra_out
+        tax = max(0.0, pretax) * rate
+        return [
+            ("売上高", sales, 1, ""),
+            ("売上原価", sales - gross, -1, "月次の原価率を日次売上に当てたもの"),
+            ("売上総利益", gross, 0, ""),
+            ("人件費", labor, -1, "勤怠の人時 × 会計の人時単価"),
+            ("その他販管費", sga, -1, "月額を営業日数で割ったもの"),
+            ("営業利益", op, 0, ""),
+            ("営業外収益", nonop_in, 1, "受取利息・仕入割引など"),
+            ("営業外費用", nonop_out, -1, "支払利息など"),
+            ("経常利益", ordinary, 0, ""),
+            ("特別利益", extra_in, 1, ""),
+            ("特別損失", extra_out, -1, ""),
+            ("税引前当期純利益", pretax, 0, ""),
+            ("法人税等", tax, -1, "実効税率 %.0f%% での概算" % (rate * 100)),
+            ("当期純利益", pretax - tax, 0, ""),
+        ]
+
+    rate = acct.get("effective_tax_rate", 0.30)
+    now = ladder_of(month["forecast_sales"], month["forecast_gross"],
+                    month["forecast_labor"], month["forecast_fixed"], month["forecast_op"],
+                    nonop_in, nonop_out, extra_in, extra_out)
+
+    # 前年同月の同じ階段。段ごとに比べられないと「順調かどうか」は言えない。
+    ly_month = (datetime.date.fromisoformat(month["dates"][0])
+                - datetime.timedelta(days=364)).strftime("%Y-%m")
+    ly_sga = month["last_year_gross"] - month["last_year_labor"] - month["last_year_op"]
+    prior = ladder_of(month["last_year_sales"], month["last_year_gross"],
+                      month["last_year_labor"], ly_sga, month["last_year_op"],
+                      bucket("営業外収益", ly_month if ly_month in trial else None),
+                      bucket("営業外費用", ly_month if ly_month in trial else None),
+                      bucket("特別利益", ly_month if ly_month in trial else None),
+                      bucket("特別損失", ly_month if ly_month in trial else None))
+
+    steps = []
+    for (label, value, sign, note), (_l, was, _s, _n) in zip(now, prior):
+        steps.append({"label": label, "amount": value, "sign": sign, "note": note,
+                      "last_year": was,
+                      "vs_ly": ((value / was - 1) * 100) if was else None})
+    return {
+        "steps": steps,
+        "nonop_from": recurring_src,
+        "nonop_estimated": recurring_src != month["month"],
+        "extra_settled": extra_src is not None,
+        "last_year_month": ly_month,
+        "tax_rate": rate,
+        "depreciation": bucket("減価償却費", recurring_src),
+        "net": steps[-1]["amount"],
+    }
+
+
+def build_cash(cfg, month, balances, buys, by_date, ladder_block, yoy_offset):
+    """金は回るか。残高は確定した月末のものしか無い ── そこを画面でも隠さない。"""
+    names = (cfg.accounting or {}).get("balance", {})
+    settled = sorted(m for m in balances if m <= month["month"])
+    if not settled:
+        return None
+    latest = settled[-1]
+    prev = settled[-2] if len(settled) > 1 else None
+
+    def at(source, key):
+        return balances.get(source, {}).get(names.get(key, key), 0.0)
+
+    out = {}
+    for key in names:
+        now = at(latest, key)
+        before = at(prev, key) if prev else None
+        out[key] = {"amount": now, "prev": before,
+                    "change": (now - before) if before else None,
+                    "vs_prev": ((now / before - 1) * 100) if before else None}
+
+    span = _calendar_days(latest)
+    m_sales = sum(v["sales"] for d, v in by_date.items() if d[:7] == latest)
+    m_gross = sum(v["gross"] for d, v in by_date.items() if d[:7] == latest)
+    m_buy = sum(v for d, v in buys.items() if d[:7] == latest)
+
+    def days_of(balance, flow):
+        return (balance / (flow / span)) if flow else 0.0
+
+    ccc = {
+        "month": latest,
+        "receivable_days": days_of(out["売掛金"]["amount"], m_sales),
+        "inventory_days": days_of(out["棚卸資産"]["amount"], m_sales - m_gross),
+        "payable_days": days_of(out["買掛金"]["amount"], m_buy),
+    }
+    ccc["days"] = ccc["receivable_days"] + ccc["inventory_days"] - ccc["payable_days"]
+
+    working = out["売掛金"]["amount"] + out["棚卸資産"]["amount"] - out["買掛金"]["amount"]
+    working_prev = None
+    if prev:
+        working_prev = at(prev, "売掛金") + at(prev, "棚卸資産") - at(prev, "買掛金")
+
+    shift = datetime.timedelta(days=yoy_offset)
+
+    def ly(day):
+        return (datetime.date.fromisoformat(day) - shift).isoformat()
+
+    actual_days = [d for d in month["dates"] if d in by_date]
+    rest_days = [d for d in month["dates"] if d > month["last_actual_date"]]
+    buy_actual = sum(buys.get(d, 0.0) for d in actual_days)
+    buy_rest_ly = sum(buys.get(ly(d), 0.0) for d in rest_days)
+    buy_forecast = buy_actual + buy_rest_ly * month["pace"]
+    buy_ly = sum(buys.get(ly(d), 0.0) for d in month["dates"])
+
+    # 稼いだ利益がそのまま現金になるわけではない ──
+    # 減価償却は現金が出ていかず、運転資本が膨らめばその分だけ現金は減る。
+    wc_change = (working - working_prev) if working_prev is not None else 0.0
+    cash_end = out["現預金"]["amount"] + ladder_block["net"] + ladder_block["depreciation"] - wc_change
+
+    return dict(out, ccc=ccc, working_capital=working, working_capital_prev=working_prev,
+                working_capital_change=wc_change,
+                cash_end_forecast=cash_end, as_of=latest,
+                purchase={"actual": buy_actual, "forecast": buy_forecast, "last_year": buy_ly,
+                          "vs_ly": ((buy_forecast / buy_ly - 1) * 100) if buy_ly else None,
+                          "series": [(d, buys.get(d, 0.0)) for d in sorted(by_date)]})
+
+
 def build(conn, cfg, yoy_offset=364):
     monthly = load_monthly(conn)
     sales, hours = load_daily(conn)
@@ -257,5 +426,12 @@ def build(conn, cfg, yoy_offset=364):
                 points.append((month, None, None))
         by_dept[dept] = points
 
-    return {"days": days, "month": month_block, "departments": departments,
+    trial = load_free(conn, "試算表")
+    balances = load_free(conn, "残高")
+    buys = load_purchase(conn)
+    ladder_block = build_ladder(cfg, month_block, trial)
+    cash_block = build_cash(cfg, month_block, balances, buys, by_date, ladder_block, yoy_offset)
+
+    return {"days": days, "month": month_block, "ladder": ladder_block, "cash": cash_block,
+            "departments": departments,
             "series_months": series_months, "monthly_by_dept": by_dept}

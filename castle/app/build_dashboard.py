@@ -189,30 +189,98 @@ def pct(value, good_high=True, unit="%"):
     return '<span class="%s">%+.1f%s</span>' % (cls, value, unit)
 
 
-def sparkline(weeks, prior, target, width=260, height=70, pad=8):
+def momentum(weeks, span=3):
+    """勢い。直近3週の平均と、その前3週の平均を比べる（%）。
+
+    1週だけの上下はノイズなので傾きに使わない。「3週まとめて上か下か」で見る。
+    """
+    vals = [v for _, v in weeks if v is not None]
+    if len(vals) < 2:
+        return 0.0
+    k = min(span, len(vals) // 2)
+    recent = sum(vals[-k:]) / k
+    before = sum(vals[-2 * k:-k]) / k
+    return (recent / before - 1) * 100 if before else 0.0
+
+
+# 良し悪しは2軸でしか決まらない ── 水準（目標に届いているか）と 向き（上がっているか）。
+# 1軸だけで判定すると、「ほぼ目標線上で横ばい」と「大きく未達で落ち続けている」が
+# 同じ言葉になる。そうなった瞬間、本当に手を打つべき部門が埋もれる。
+#
+#          上向き   横ばい   下向き
+#   達成 |  順調     順調     失速
+#   僅差 |  順調     失速     失速
+#   未達 |  挽回中   要対処   要対処
+VERDICTS = ("要対処", "失速", "挽回中", "順調")
+VERDICT_WHY = {
+    "要対処": "目標に届かず、戻る気配がない",
+    "失速": "水準は保っているが、下を向いている",
+    "挽回中": "目標未達だが、上を向いている",
+    "順調": "目標を満たし、落ちていない",
+}
+NEAR_MISS = -5.0   # ここまでは「僅差」。誤差と本当の未達を混ぜない
+FLAT = 1.0         # 3週平均どうしの比較なので、この幅の上下は向きと呼ばない
+
+
+def verdict(vs_target, mom):
+    level = "達成" if (vs_target or 0) >= 0 else ("僅差" if (vs_target or 0) >= NEAR_MISS else "未達")
+    move = "上" if (mom or 0) >= FLAT else ("下" if (mom or 0) <= -FLAT else "平")
+    if level == "未達":
+        return "挽回中" if move == "上" else "要対処"
+    if move == "下" or (level == "僅差" and move == "平"):
+        return "失速"
+    return "順調"
+
+
+def sparkline(weeks, prior, target, width=280, height=94):
+    """目盛りのある折れ線。
+
+    スケールの無い線は「なんとなく上がっている」しか言えない。
+    縦は上下端の実数、横は最初と最後の週、目標線には目標値を必ず添える。
+    """
+    left, right, top, bottom = 40, 6, 12, 66
     values = [v for _, v in weeks] + [v for v in prior if v is not None] + [target]
     lo, hi = min(values), max(values)
     span = (hi - lo) or (hi or 1)
-    lo, hi = lo - span * 0.15, hi + span * 0.15
+    lo, hi = lo - span * 0.18, hi + span * 0.18
+
+    def y_of(value):
+        return bottom - (bottom - top) * ((value - lo) / (hi - lo))
 
     def points(series):
         out = []
         for i, value in enumerate(series):
             if value is None:
                 continue
-            x = pad + (width - 2 * pad) * (i / max(len(series) - 1, 1))
-            y = height - pad - (height - 2 * pad) * ((value - lo) / (hi - lo))
-            out.append("%.1f,%.1f" % (x, y))
+            x = left + (width - left - right) * (i / max(len(series) - 1, 1))
+            out.append("%.1f,%.1f" % (x, y_of(value)))
         return " ".join(out)
 
-    ty = height - pad - (height - 2 * pad) * ((target - lo) / (hi - lo))
-    return (
-        '<svg viewBox="0 0 %d %d" role="img" aria-label="週次推移">'
-        '<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" stroke="var(--muted)" stroke-width="1" stroke-dasharray="3 3" opacity=".7"/>'
-        '<polyline fill="none" stroke="var(--prior)" stroke-width="1.6" points="%s"/>'
-        '<polyline fill="none" stroke="var(--bar)" stroke-width="2.2" stroke-linejoin="round" points="%s"/>'
-        "</svg>"
-    ) % (width, height, pad, ty, width - pad, ty, points(prior), points([v for _, v in weeks]))
+    def md(monday):
+        return "%d/%d" % (int(monday[5:7]), int(monday[8:10]))
+
+    ty = y_of(target)
+    parts = [
+        '<svg viewBox="0 0 %d %d" role="img" aria-label="週次推移">' % (width, height),
+        # 縦の目盛り。上下端の実数を置く
+        '<text class="ax" x="%d" y="%.1f" text-anchor="end">%s</text>' % (left - 6, top + 3, yen(hi)),
+        '<text class="ax" x="%d" y="%.1f" text-anchor="end">%s</text>' % (left - 6, bottom + 3, yen(lo)),
+        # 目標線と、その値
+        '<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" stroke="var(--warn)" stroke-width="1.2" '
+        'stroke-dasharray="4 3" opacity=".8"/>' % (left, ty, width - right, ty),
+        '<text class="axt" x="%d" y="%.1f">目標 %s</text>'
+        % (left + 2, ty - 4 if ty > top + 14 else ty + 11, yen(target)),
+        # 前年（奥に退く線）→ 当年（手前の光る線）の順で重ねる
+        '<polyline class="prior" fill="none" stroke="var(--prior)" stroke-width="1.6" points="%s"/>' % points(prior),
+        '<polyline fill="none" stroke="var(--accent)" stroke-width="2.4" stroke-linejoin="round" '
+        'stroke-linecap="round" points="%s"/>' % points([v for _, v in weeks]),
+        # 横の目盛り
+        '<text class="axx" x="%d" y="%d">%s</text>' % (left, height - 6, md(weeks[0][0])),
+        '<text class="axx" x="%d" y="%d" text-anchor="end">%s</text>'
+        % (width - right, height - 6, md(weeks[-1][0])),
+        "</svg>",
+    ]
+    return "".join(parts)
 
 
 def build_ranking(results):
@@ -273,6 +341,7 @@ def knowledge_html(rows):
 
 
 def build_trends(entries, series_by_name, metric):
+    """カードを作る。良いほうから並べない ── 手を打つべき部門を先に見せる。"""
     cards = []
     for name, r in entries:
         weeks_prior = weekly(series_by_name[name])
@@ -280,11 +349,29 @@ def build_trends(entries, series_by_name, metric):
         for monday, _ in r["weeks"]:
             bucket = weeks_prior.get(shift(monday, metric["yoy_offset_days"]))
             prior.append(bucket[2] / bucket[1] if bucket and bucket[1] else None)
-        cards.append(
-            '<div class="spark"><div class="t"><b>%s</b><span>%s 円/人時</span></div>%s</div>'
-            % (name, yen(r["pph"]), sparkline(r["weeks"], prior, r["target"]))
-        )
-    return "".join(cards)
+        mom = momentum(r["weeks"])
+        cards.append({
+            "name": name, "pph": r["pph"], "target": r["target"],
+            "vs_target": r["vs_target"] or 0.0, "momentum": mom,
+            "verdict": verdict(r["vs_target"], mom),
+            "svg": sparkline(r["weeks"], prior, r["target"]),
+        })
+
+    rank = {v: i for i, v in enumerate(VERDICTS)}
+    head, rest = cards[:1], cards[1:]
+    rest.sort(key=lambda c: (rank[c["verdict"]], c["vs_target"]))
+    cards = head + rest
+
+    html = "".join(
+        '<div class="spark c%d"><div class="t"><b>%s</b>'
+        '<span class="chip c%d" title="%s">%s</span></div>'
+        '<div class="now">%s <em>円/人時</em></div>%s'
+        '<div class="f"><span>目標比 %s</span><span>直近3週 %s</span></div></div>'
+        % (rank[c["verdict"]] + 1, escape(c["name"]), rank[c["verdict"]] + 1,
+           VERDICT_WHY[c["verdict"]], c["verdict"], yen(c["pph"]), c["svg"],
+           pct(c["vs_target"]), pct(c["momentum"]))
+        for c in cards)
+    return html, [{k: v for k, v in c.items() if k != "svg"} for c in cards]
 
 
 # ---------------------------------------------------------------- 組み立て
@@ -333,6 +420,7 @@ def build(instance, verbose=False, nav=False):
     series_by_name[whole_label] = total
     trend_entries = [(whole_label, whole)] + sorted(results.items(), key=lambda kv: -kv[1]["pph"])
 
+    trends_html, trend_cards = build_trends(trend_entries, series_by_name, metric)
     est_in_window = sorted(d for d in dates[-window:] if d in estimated)
     trends = {name: margin_trend(margins.get(name, {})) for name in results}
 
@@ -403,6 +491,7 @@ def build(instance, verbose=False, nav=False):
 
     # 部門別の推移は**日次のまま**並べる。月次に丸めるのは会計の都合であって、経営の都合ではない。
     chart_days = [d for d in dates if d >= shift(dates[-1], 120)]
+    buy_by_day = dict(book["cash"]["purchase"]["series"]) if book["cash"] else {}
     amount_series, rate_series = [], []
     for dept in sorted(measured, key=lambda d: -results[d["name"]]["gross"]):
         name = dept["name"]
@@ -423,6 +512,16 @@ def build(instance, verbose=False, nav=False):
         notice=notice,
         landing=screen.landing(month),
         breakdown=screen.breakdown(month),
+        ladder=screen.ladder(book),
+        cash=screen.cash(book),
+        purchase=screen.purchase(book),
+        # 前年の日付まで1本の線に繋ぐと、年をまたいだ折れ線になって傾向が読めない。
+        # 部門別グラフと同じ期間（直近120日）に揃える。
+        buychart=screen.series_chart(
+            chart_days,
+            [("仕入（7営業日移動平均）",
+              screen.moving_average([buy_by_day.get(d) for d in chart_days]))],
+            lambda v: "%.2f億" % (v / 1e8), "c-buy") if book["cash"] else "",
         voyage=screen.voyage(month),
         dept_amount=screen.series_chart(
             chart_days, amount_series,
@@ -436,7 +535,7 @@ def build(instance, verbose=False, nav=False):
         alerts=screen.alerts(book["departments"],
                              {n: r["trend"] for n, r in results.items()}, trends, attached,
                              metric["alert_drop_ratio"] * 100),
-        trends=build_trends(trend_entries, series_by_name, metric),
+        trends=trends_html,
         notes=(note_html(notes) if notes else
                '<div class="none">まだありません。<a href="/note">申し送りを書く</a>'
                '（<code>python castle/app/serve.py</code> で開きます）</div>'),
@@ -459,6 +558,12 @@ def build(instance, verbose=False, nav=False):
                    "target": r["target"], "vs_target": r["vs_target"], "vs_prev": r["vs_prev"],
                    "vs_yoy": r["vs_yoy"], "trend": r["trend"]}
             for name, r in results.items()},
+        "trend_cards": trend_cards,
+        "buy_chart_range": [chart_days[0], chart_days[-1]] if chart_days else None,
+        "ladder": book["ladder"]["steps"],
+        "cash": ({k: v for k, v in book["cash"].items() if k != "purchase"}
+                 | {"purchase": {k: v for k, v in book["cash"]["purchase"].items()
+                                 if k != "series"}}) if book["cash"] else None,
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 
     if not verbose:
