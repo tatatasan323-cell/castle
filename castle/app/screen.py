@@ -308,11 +308,19 @@ def cash(book):
         ("減価償却費（現金は出ていかない）", book["ladder"]["depreciation"], 1),
         ("運転資本の増加（売掛と在庫に化けた分）", block["working_capital_change"], -1),
     ]
-    steps = "".join(
-        '<tr class="%s"><td class="name">%s</td><td class="v">%s</td></tr>'
-        % ("adj" if sign else "sub", label,
-           (("＋" if sign > 0 else "−") if sign else "") + money(abs(value)))
-        for label, value, sign in bridge)
+    # 内訳を出す。売掛なら回収、在庫なら発注 ── 打つ手が違う。
+    WHY = {"売掛金": "回収が遅れた分", "棚卸資産": "在庫に積んだ分", "買掛金": "支払を待ってもらった分"}
+    detail = "".join(
+        '<tr class="adj sub2"><td class="name">うち %s（%s）</td><td class="v">%s</td></tr>'
+        % (key, WHY[key], ("＋" if value > 0 else "−") + money(abs(value)))
+        for key, value in (block.get("working_capital_parts") or {}).items() if value)
+    steps = ""
+    for label, value, sign in bridge:
+        steps += ('<tr class="%s"><td class="name">%s</td><td class="v">%s</td></tr>'
+                  % ("adj" if sign else "sub", label,
+                     (("＋" if sign > 0 else "−") if sign else "") + money(abs(value))))
+        if label.startswith("運転資本"):
+            steps += detail
 
     return (
         '<div class="breakdown">%s</div>'

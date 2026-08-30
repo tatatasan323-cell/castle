@@ -223,18 +223,18 @@ BALANCE = {
     "現金及び預金": 1_480_000, "売掛金": 4_050_000, "棚卸資産": 1_310_000,
     "買掛金": 3_020_000, "未払金": 480_000, "短期借入金": 2_000_000,
 }
-BALANCE_DRIFT = {                     # 6科目とも動かす。1つでも固定すると「前月比 +0.0%」が並び、壊れて見える
-    "2026-06": {"現金及び預金": 1.00, "売掛金": 0.97, "棚卸資産": 0.98,
-                "買掛金": 0.99, "未払金": 1.02, "短期借入金": 1.00},
-    "2026-07": {"現金及び預金": 0.94, "売掛金": 1.03, "棚卸資産": 1.05,
-                "買掛金": 1.02, "未払金": 0.96, "短期借入金": 0.975},   # 毎月少しずつ返している
-    "2025-06": {"現金及び預金": 1.06, "売掛金": 0.94, "棚卸資産": 0.93,
-                "買掛金": 0.96, "未払金": 1.00, "短期借入金": 1.10},
-    "2025-07": {"現金及び預金": 1.03, "売掛金": 0.96, "棚卸資産": 0.95,
-                "買掛金": 0.98, "未払金": 0.98, "短期借入金": 1.08},
-    "2025-08": {"現金及び預金": 1.01, "売掛金": 0.98, "棚卸資産": 0.97,
-                "買掛金": 1.00, "未払金": 1.01, "短期借入金": 1.05},
+OPENING = {                            # 期首（最初の月の前月末）。ここから流れで積む
+    "現金及び預金": 1_620_000_000, "売掛金": 3_900_000_000, "棚卸資産": 1_240_000_000,
+    "買掛金": 2_950_000_000, "未払金": 470_000_000, "短期借入金": 2_260_000_000,
 }
+REPAY = 20_000_000                     # 毎月の約定返済
+
+# 回収率（前月の売上のうち、当月に入ってくる割合）。
+# ここが1.0を割ると売掛が積み上がり、利益が出ていても現金が細る ──
+# 「黒字なのに金が無い」の、いちばんありふれた原因。
+COLLECT = {"2025-07": 0.998, "2025-08": 0.997, "2026-06": 0.985, "2026-07": 0.955}
+COLLECT_DEFAULT = 0.998
+
 
 
 # 営業外も毎月同じではない。仕入割引は仕入高に連動し、支払利息は借入残に連動する。
@@ -264,15 +264,85 @@ def write_trial(months):
     return written
 
 
-def write_balance(months):
-    """月末残高。ここが「金は回るか」の材料になる。"""
+def buy_of(code, day, sales):
+    """その日の仕入。売上原価に、日ごとの発注の波を掛けたもの。
+
+    **式はここ1箇所に置く。** 仕入日報と月末残高の両方が同じ式を使うので、
+    片方だけ直すと貸借と損益が繋がらなくなる。
+    """
+    return int(sales * cost_rate(code, day.strftime("%Y-%m")) * (0.94 + 0.12 * ((day.day % 7) / 6)))
+
+
+def write_balance(months, rows, hours_rows):
+    """月末残高。**流れから積み上げて作る。**
+
+    残高を係数で置くと、貸借と損益が繋がらない ── CCCも運転資本も
+    「それらしいだけの数字」になる。だから、実際の売上・仕入・原価から積む。
+
+      売掛金  = 前月末 ＋ 当月売上 − 当月回収（回収は前月売上ぶん）
+      買掛金  = 前月末 ＋ 当月仕入 − 当月支払（支払は前月仕入ぶん）
+      棚卸資産 = 前月末 ＋ 当月仕入 − 当月売上原価 ＋ 棚卸差異
+      現預金  = 前月末 ＋ 回収 − 支払 − 人件費 − 販管費 − 営業外収支 − 借入返済
+
+    棚卸差異は±0.4%まで。実地棚卸は必ず少しズレる ── ゼロにすると嘘になる。
+    """
+    org_of = {code: org for code, _n, org, _b, _t, _lv, _w in SALES_DEPTS}
+    org_of.update({code: org for code, org, _h, _w, _s in INDIRECT})
+    wage_of = {code: w for code, _n, _o, _b, _t, _lv, w in SALES_DEPTS}
+    wage_of.update({code: w for code, _o, _h, w, _s in INDIRECT})
+
+    sales_m, buy_m, cost_m = {}, {}, {}
+    for code, _name, day, sales, _slips in rows:
+        key = day.strftime("%Y-%m")
+        sales_m[key] = sales_m.get(key, 0) + sales
+        buy_m[key] = buy_m.get(key, 0) + buy_of(code, day, sales)
+        cost_m[key] = cost_m.get(key, 0) + int(sales * cost_rate(code, key))
+
+    hours_m = {}
+    for org, day, hrs, _ot in hours_rows:
+        hours_m.setdefault(day.strftime("%Y-%m"), {}).setdefault(org, 0.0)
+        hours_m[day.strftime("%Y-%m")][org] += hrs
+
+    def labor_of(month):
+        total = 0
+        for code in list(org_of):
+            total += int(hours_m.get(month, {}).get(org_of[code], 0.0) * wage_of[code])
+        return total
+
+    def sga_of(month):
+        return (int(sales_m.get(month, 0) * SGA_RATE)
+                + sum(monthly for _c, _o, _h, _w, monthly in INDIRECT))
+
+    ordered = sorted(months)
+    every = sorted(sales_m)
+    state = dict(OPENING)
+    rnd = random.Random(20260630)
     written = 0
-    for month in months:
-        drift = BALANCE_DRIFT.get(month, {})
+    for month in every:
+        before = every[every.index(month) - 1] if every.index(month) else None
+        collect = (sales_m.get(before, sales_m[month])
+                   * COLLECT.get(month, COLLECT_DEFAULT))   # 回収は1か月遅れ
+        pay = buy_m.get(before, buy_m[month])                      # 支払も1か月遅れ
+        drift = 1.0 + rnd.uniform(-0.004, 0.004)                   # 棚卸差異
+
+        state["売掛金"] += sales_m[month] - collect
+        state["買掛金"] += buy_m[month] - pay
+        state["棚卸資産"] = (state["棚卸資産"] + buy_m[month] - cost_m[month]) * drift
+        state["未払金"] = sga_of(month) * 3.0                       # 経費のおよそ3か月ぶん
+        state["短期借入金"] -= REPAY
+        nonop = sum(NONOP_DRIFT.get(month, {}).get(k, 1.0) * v * 1000
+                    for k, v in NONOP.items() if k in ("受取利息", "仕入割引"))
+        outgo = sum(NONOP_DRIFT.get(month, {}).get(k, 1.0) * v * 1000
+                    for k, v in NONOP.items() if k in ("支払利息", "為替差損"))
+        state["現金及び預金"] += (collect - pay - labor_of(month) - sga_of(month)
+                            + nonop - outgo - REPAY)
+
+        if month not in ordered:
+            continue
         lines = ["会計システム　月末残高一覧　%s年%d月度" % (month[:4], int(month[5:])),
                  "科目,残高(千円)"]
-        for name, value in BALANCE.items():
-            lines.append("%s,%d" % (name, round(value * drift.get(name, 1.0))))
+        for name in BALANCE:
+            lines.append("%s,%d" % (name, round(state[name] / 1000)))
         path = OUT / ("C社会計_月末残高_%s.csv" % month.replace("-", ""))
         path.write_bytes((CRLF.join(lines) + CRLF).encode("cp932"))
         written += 1
@@ -288,7 +358,7 @@ def write_purchase(path, rows, issued):
              "部門コード,部門名,計上日,仕入金額（税抜）,伝票枚数"]
     total = 0
     for code, name, day, sales, _slips in sorted(rows, key=lambda r: (r[2], r[0])):
-        buy = int(sales * cost_rate(code, day.strftime("%Y-%m")) * (0.94 + 0.12 * ((day.day % 7) / 6)))
+        buy = buy_of(code, day, sales)
         total += buy
         lines.append("%s,%s,%s,%d,%d" % (code, name, day.strftime("%Y/%m/%d"), buy, max(1, buy // 900_000)))
     lines.append(",合計,,%d," % total)
@@ -316,7 +386,7 @@ def main():
                         - {m for m in {d.strftime("%Y-%m") for _c, _n, d, _s, _x in sales_rows}
                            if len({d for _c, _n, d, _s, _x in sales_rows if d.strftime("%Y-%m") == m}) < 15})
         n5 = write_trial(months)
-        n6 = write_balance(months)
+        n6 = write_balance(months, sales_rows, hours_rows)
         print("%s: 売上 %d行 ／ 勤怠 %d行 ／ 部門損益 %dヶ月 ／ 仕入 %d行 ／ 試算表 %dヶ月 ／ 月末残高 %dヶ月"
               % (suffix, n1, n2, n3, n4, n5, n6))
 

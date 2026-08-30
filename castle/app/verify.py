@@ -1007,7 +1007,53 @@ def _run(instance):
     check("検査で入れた昇格の材料を片付けた",
           conn.execute("SELECT COUNT(*) FROM records WHERE id > ?", (mark,)).fetchone()[0] == 0)
 
+    print("")
+    print("【21】貸借と損益が繋がっているか")
+    # 表示が壊れていないことと、数字が互いに整合していることは別。
+    # 残高を流れと別々に作れば、CCCも運転資本も「それらしいだけの数字」になる。
+    bal = pnl.load_free(conn, "残高")
+    buys = pnl.load_purchase(conn)
+    # この節より上で book は summary.json に差し替わっている。ここで組み直す。
+    ledger = pnl.build(conn, cfg)
+    by_day = {d["date"]: d for d in ledger["days"]}
+    names = cfg.accounting["balance"]
+
+    months = sorted(bal)
+    checked = 0
+    for n in range(1, len(months)):
+        before, now = months[n - 1], months[n]
+        if before[:4] != now[:4] or int(now[5:7]) != int(before[5:7]) + 1:
+            continue
+        days = sorted(d for d in by_day if d[:7] == now)
+        if not days:
+            continue
+        # 在庫の積み上げ：前月末 ＋ 仕入 − 売上原価
+        rolled = bal[before][names["棚卸資産"]]
+        for day in days:
+            rolled += buys.get(day, 0.0) - (by_day[day]["sales"] - by_day[day]["gross"])
+        real = bal[now][names["棚卸資産"]]
+        gap = abs(rolled - real) / real * 100 if real else 100.0
+        checked += 1
+        check("%s の棚卸資産が、仕入と売上原価の流れと繋がっている" % now, gap <= 1.5,
+              "積み上げ %.2f億 ／ 会計 %.2f億 ／ ずれ %.1f%%"
+              % (rolled / 1e8, real / 1e8, gap))
+    check("繋がりを確かめられる月がある", checked >= 2, "%d月ぶん" % checked)
+
+    # 売掛金：前月末 ＋ 売上 − 回収。回収は持っていないので、回転日数が暴れないことだけ見る
+    ratios = []
+    for month_key in months:
+        days = [d for d in by_day if d[:7] == month_key]
+        if not days:
+            continue
+        sales = sum(by_day[d]["sales"] for d in days)
+        if sales:
+            ratios.append(bal[month_key][names["売掛金"]] / sales)
+    check("売掛金と売上の比が、月ごとに暴れていない",
+          bool(ratios) and (max(ratios) - min(ratios)) / (sum(ratios) / len(ratios)) < 0.30,
+          "月商比 %s" % "／".join("%.2f" % r for r in ratios))
+
     return report()
+
 
 
 

@@ -234,10 +234,15 @@ def build_cash(cfg, month, balances, buys, by_date, ladder_block, yoy_offset):
     # 稼いだ利益がそのまま現金になるわけではない ──
     # 減価償却は現金が出ていかず、運転資本が膨らめばその分だけ現金は減る。
     wc_change = (working - working_prev) if working_prev is not None else 0.0
+    # 「運転資本が増えた」だけでは打つ手が決まらない。売掛なら回収、在庫なら発注。
+    parts = {}
+    if prev:
+        for key, sign in (("売掛金", 1), ("棚卸資産", 1), ("買掛金", -1)):
+            parts[key] = sign * (at(latest, key) - at(prev, key))
     cash_end = out["現預金"]["amount"] + ladder_block["net"] + ladder_block["depreciation"] - wc_change
 
     return dict(out, ccc=ccc, working_capital=working, working_capital_prev=working_prev,
-                working_capital_change=wc_change,
+                working_capital_change=wc_change, working_capital_parts=parts,
                 cash_end_forecast=cash_end, as_of=latest,
                 purchase={"actual": buy_actual, "forecast": buy_forecast, "last_year": buy_ly,
                           "vs_ly": ((buy_forecast / buy_ly - 1) * 100) if buy_ly else None,
