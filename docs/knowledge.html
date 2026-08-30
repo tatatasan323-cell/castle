@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>知識の泉 ── 架空食品商事株式会社</title>
+<style>
+/* 城の見た目。全画面で共有する ── 変えるときはここ1枚だけ。
+   ビルド時に各テンプレートへ差し込むので、実行時の外部ファイル読み込みはゼロのまま。
+
+   イメージは「空中に投影されたステータス」。暗闇にぼうっと浮かぶ。
+
+   ただし **光らせるのは数字と線と縁だけ**。本文まで光らせると読めなくなる。
+   面は半透明にして、背後の微かな明かりを透かす。影で持ち上げず、光で浮かせる。 */
+
+:root{
+  --bg:#05080c;
+  --ink:#dfeef4;
+  --muted:#6f8794;
+
+  --accent:#5ee0f0;          /* 投影光。主指標と現在地にだけ */
+  --accent-dim:#2f8fa2;
+  --bar:#5ee0f0;
+  --prior:#8a7fc0;           /* 前年。当年（シアン）と目標（琥珀）のどちらとも別の色相にする */
+  --ok:#5fd6a4;
+  --warn:#e8b866;
+  --bad:#ff7a6b;
+
+  --card:rgba(17,28,38,.62);
+  --card-2:rgba(22,38,50,.74);
+  --line:rgba(94,224,240,.13);
+  --line-2:rgba(94,224,240,.26);
+  --code:rgba(4,10,16,.72);
+
+  --glow:0 0 18px rgba(94,224,240,.30);
+  --glow-soft:0 0 34px rgba(94,224,240,.16);
+}
+
+*{box-sizing:border-box}
+
+body{
+  margin:0;
+  color:var(--ink);
+  background:
+    /* 上からの投影光 */
+    radial-gradient(1100px 520px at 50% -220px, rgba(94,224,240,.13), transparent 72%),
+    radial-gradient(760px 420px at 12% 108%, rgba(80,140,220,.07), transparent 70%),
+    /* HUDの格子。ほとんど見えない濃さで空間を出す */
+    linear-gradient(rgba(94,224,240,.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(94,224,240,.028) 1px, transparent 1px),
+    var(--bg);
+  background-size:auto, auto, 44px 44px, 44px 44px, auto;
+  background-attachment:fixed;
+  font-family:"Yu Gothic UI","Yu Gothic","Hiragino Sans","Meiryo",system-ui,sans-serif;
+  font-size:15px;
+  line-height:1.75;
+  -webkit-font-smoothing:antialiased;
+}
+
+.wrap{max-width:1040px;margin:0 auto;padding:26px 22px 72px}
+
+nav{
+  display:flex;gap:18px;font-size:12.5px;letter-spacing:.03em;
+  padding-bottom:13px;margin-bottom:20px;
+  border-bottom:1px solid var(--line);
+}
+nav a{color:var(--muted);text-decoration:none;transition:color .18s,text-shadow .18s}
+nav a:hover{color:var(--accent);text-shadow:var(--glow)}
+nav b{color:var(--accent);font-weight:600;text-shadow:var(--glow)}
+
+.eyebrow{color:var(--muted);font-size:12px;letter-spacing:.14em}
+h1{font-size:23px;font-weight:600;margin:4px 0 4px;letter-spacing:.06em}
+.sub,.lead{color:var(--muted);font-size:12.5px}
+h2{
+  font-size:12.5px;font-weight:600;color:var(--accent-dim);
+  letter-spacing:.16em;margin:40px 0 12px;
+  padding-bottom:8px;border-bottom:1px solid var(--line);
+}
+h3{font-size:13.5px;font-weight:600;margin:20px 0 4px}
+
+.up{color:var(--ok)} .down{color:var(--bad)} .flat{color:var(--muted)}
+b,strong{font-weight:600}
+
+/* 面 ── 半透明。縁の上辺だけを光らせて、板が浮いているように見せる */
+.card,.none,.notice,.msg,.limits,details.howto{
+  position:relative;
+  background:var(--card);
+  border:1px solid var(--line);
+  border-radius:12px;
+  backdrop-filter:blur(7px);
+  -webkit-backdrop-filter:blur(7px);
+}
+
+table{width:100%;border-collapse:collapse}
+th,td{
+  padding:11px 12px;text-align:right;border-bottom:1px solid var(--line);
+  font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1;
+}
+th{color:var(--muted);font-size:11.5px;font-weight:500;letter-spacing:.07em;
+   border-bottom-color:var(--line-2)}
+td.name,th.name{text-align:left;white-space:nowrap}
+tbody tr{transition:background .15s}
+tbody tr:hover{background:rgba(94,224,240,.045)}
+tbody tr:last-child td{border-bottom:none}
+
+.none{padding:14px 18px;color:var(--muted);font-size:13.5px}
+
+.notice{border-left:2px solid var(--warn);padding:12px 18px;margin-top:18px;
+        font-size:13px;color:var(--muted)}
+.notice b{color:var(--warn);font-weight:600;text-shadow:0 0 14px rgba(232,184,102,.30)}
+
+.msg{padding:11px 16px;margin:16px 0;font-size:13px;border-left:2px solid var(--bad)}
+.msg.ok{border-left-color:var(--ok)}
+.msg.warn{border-left-color:var(--warn)}
+
+.tag{
+  border:1px solid var(--line-2);border-radius:3px;padding:1px 7px;
+  font-size:10.5px;letter-spacing:.07em;color:var(--muted);
+}
+
+code,pre{
+  background:var(--code);border:1px solid var(--line);border-radius:6px;
+  font-size:12.5px;font-family:ui-monospace,"Consolas","Menlo",monospace;color:var(--ink);
+}
+code{padding:1px 6px}
+pre{padding:12px 14px;overflow-x:auto;margin:8px 0;line-height:1.65}
+
+label{display:block;font-size:12px;color:var(--muted);letter-spacing:.05em;margin:14px 0 5px}
+input,select,textarea{
+  width:100%;padding:9px 11px;font:inherit;color:var(--ink);
+  background:rgba(4,10,16,.6);border:1px solid var(--line-2);border-radius:6px;
+}
+input:focus,select:focus,textarea:focus{
+  outline:none;border-color:var(--accent);box-shadow:0 0 0 1px rgba(94,224,240,.18), var(--glow-soft);
+}
+textarea{resize:vertical}
+button{
+  padding:10px 24px;font:inherit;font-weight:600;letter-spacing:.05em;
+  color:#04121a;background:var(--accent);border:0;border-radius:6px;cursor:pointer;
+  box-shadow:var(--glow);transition:filter .15s,box-shadow .15s;
+}
+button:hover{filter:brightness(1.1);box-shadow:0 0 26px rgba(94,224,240,.45)}
+button.quiet{
+  background:transparent;color:var(--muted);border:1px solid var(--line-2);
+  font-weight:400;padding:4px 12px;font-size:11.5px;box-shadow:none;
+}
+button.quiet:hover{color:var(--accent);border-color:var(--accent-dim);box-shadow:var(--glow-soft)}
+
+svg{display:block;width:100%;height:auto}
+/* 線は光らせる。ここが「投影されている」感じの主役 */
+svg polyline{filter:drop-shadow(0 0 5px rgba(94,224,240,.40))}
+
+.keys,.legend{color:var(--muted);font-size:11.5px;margin-top:10px;
+              display:flex;gap:18px;flex-wrap:wrap}
+.keys i{display:inline-block;width:16px;height:2px;vertical-align:3px;margin-right:6px}
+.keys i.dash{background:repeating-linear-gradient(90deg,var(--bar),var(--bar) 3px,transparent 3px,transparent 6px)}
+.keys i.dash-warn{background:repeating-linear-gradient(90deg,var(--warn),var(--warn) 4px,transparent 4px,transparent 7px)}
+
+details.howto{padding:0 22px;margin-top:18px}
+details.howto[open]{padding-bottom:18px}
+details.howto summary{
+  cursor:pointer;padding:14px 0;font-size:13.5px;font-weight:600;list-style:none;
+  letter-spacing:.05em;color:var(--muted);
+}
+details.howto summary:hover{color:var(--accent)}
+details.howto summary::-webkit-details-marker{display:none}
+details.howto summary::before{content:"▸ ";color:var(--accent)}
+details.howto[open] summary::before{content:"▾ "}
+details.howto p,details.howto li{font-size:13px;color:var(--muted);margin:2px 0}
+details.howto b{color:var(--ink)}
+details.howto ul{padding-left:1.2em;margin:5px 0}
+
+.limits{padding:4px 22px 16px;margin-top:12px}
+.limits ul{margin:10px 0 0;padding-left:1.2em;font-size:13px;color:var(--muted)}
+.limits li{margin-bottom:7px}
+.limits b{color:var(--ink)}
+
+footer{
+  margin-top:44px;color:var(--muted);font-size:11.5px;letter-spacing:.04em;
+  border-top:1px solid var(--line);padding-top:14px;
+}
+
+.find{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 20px}
+.find .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
+.find .row>div{flex:1;min-width:150px}
+.find label{margin-top:0}
+.find .hint{color:var(--muted);font-size:11.5px;margin-top:10px}
+.entry{background:var(--card);border:1px solid var(--line);border-radius:12px;
+       padding:16px 20px;margin-bottom:10px}
+.entry .ess{font-size:16px;font-weight:600;line-height:1.6}
+.entry .sub{font-size:13px;color:var(--muted);margin-top:6px}
+.entry .sub b{color:var(--ink);font-weight:400}
+.entry .meta{font-size:11.5px;color:var(--muted);margin-top:11px;
+             display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.tag.判断{color:var(--bar);border-color:var(--bar)}
+.tag.失敗{color:var(--bad);border-color:var(--bad)}
+.tag.コツ{color:var(--ok);border-color:var(--ok)}
+.tag.前提{color:var(--warn);border-color:var(--warn)}
+.stale{color:var(--warn)}
+form.inline{display:inline}
+details.write{background:var(--card);border:1px solid var(--line);border-radius:12px;
+              padding:0 20px;margin-top:26px}
+details.write[open]{padding-bottom:20px}
+details.write summary{cursor:pointer;padding:16px 0;font-weight:600;font-size:14px;
+                      list-style:none;letter-spacing:.04em}
+details.write summary::-webkit-details-marker{display:none}
+details.write summary::before{content:"▸ ";color:var(--accent)}
+details.write[open] summary::before{content:"▾ "}
+.rule{background:var(--code);border:1px solid var(--line);border-radius:8px;
+      padding:12px 16px;font-size:12px;color:var(--muted);margin:8px 0 4px;line-height:1.8}
+.rule b{color:var(--ink)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.who{padding:9px 11px;border:1px solid var(--line-2);border-radius:6px;background:var(--bg)}
+.who span{color:var(--muted);font-size:11.5px}
+a{color:var(--bar)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<nav><a href="index.html">ダッシュボード</a><a href="note.html">申し送りを書く</a><b>知識の泉</b><a href="guide.html">使い方</a></nav>
+
+<div class="eyebrow">架空食品商事株式会社</div>
+<h1>知識の泉</h1><div class="notice"><b>これは読むだけの見本です。</b>サーバが動いていないので、書き込みはできません（入力欄は押せなくしてあります）。実際に動かすと、ここから申し送りと知識が書けます ── <a href="https://github.com/tatatasan323-cell/castle">リポジトリ</a>を取得して <code>python castle/app/serve.py</code> で開きます。</div>
+<div class="lead">
+  数字の泉が出すのは「<b>何が起きたか</b>」。ここに貯めるのは「<b>この会社で、繰り返し効くこと</b>」。<br>
+  書いたものは、その部門の数字が落ちた瞬間にダッシュボードへ出ます。<b>探しに行かなくて済みます。</b>
+</div>
+
+
+
+<form class="find" method="get">
+  <div class="row">
+    <div>
+      <label for="q">さがす</label>
+      <input disabled type="search" id="q" name="q" value="" placeholder="言葉のかけら（ひらがな・ローマ字・略語でも）">
+    </div>
+    <div>
+      <label for="subject">部門</label>
+      <select disabled id="subject" name="subject"><option value="">すべての部門</option><option value="全社">全社</option><option value="加工食品部">加工食品部</option><option value="低温食品部">低温食品部</option><option value="農産部">農産部</option><option value="水産部">水産部</option><option value="畜産部">畜産部</option><option value="菓子・飲料部">菓子・飲料部</option><option value="業務用食材部">業務用食材部</option></select>
+    </div>
+    <div>
+      <label for="type">種類</label>
+      <select disabled id="type" name="type"><option value="">すべての種類</option><option value="判断">判断</option><option value="失敗">失敗</option><option value="コツ">コツ</option><option value="前提">前提</option></select>
+    </div>
+    <div style="flex:0"><button disabled type="submit">さがす</button></div>
+  </div>
+  <div class="hint">
+    「くらうど」「kuraudo」「ｸﾗｳﾄﾞ」「ＣＬＯＵＤ」── どれで打っても同じものに当たります。
+  </div>
+</form>
+
+
+
+<h2>現役の知識 3件</h2>
+<div class="entry"><div class="ess">会計の締めは翌月10日ごろ。当月の原価率と人時単価は直近確定月のものを当てている</div><div class="sub">なぜ：<b>日ごとの原価を持っているシステムが無い。持っていない数字は作らない方針のため。</b></div><div class="sub">使い方：<b>当月の粗利まわりの数字を外部に出すときは、推定であることを必ず添える。</b></div><div class="meta"><span class="tag 前提">前提</span><span class="tag">全社</span><span>記録 経理課 井上 ／ 見直し <span class="">2026-08-30</span></span><form class="inline" method="post"><input disabled type="hidden" name="action" value="review"><input disabled type="hidden" name="id" value="3527"><button disabled class="quiet" type="submit">まだ有効</button></form></div></div><div class="entry"><div class="ess">相場高のときは数量を追わない。赤字取引を止めて粗利率を守るほうが着地は良い</div><div class="sub">なぜ：<b>数量を維持しようとすると売価転嫁が遅れ、粗利率が先に落ちる。戻ったときに元の率へ戻すほうが難しい。</b></div><div class="sub">使い方：<b>相場が前年比+15%を超えたら、赤字取引の一覧を出して部門長と切る順番を決める。</b></div><div class="meta"><span class="tag 判断">判断</span><span class="tag">農産部</span><span>記録 農産課 佐藤 ／ 見直し <span class="">2026-08-30</span></span><form class="inline" method="post"><input disabled type="hidden" name="action" value="review"><input disabled type="hidden" name="id" value="3526"><button disabled class="quiet" type="submit">まだ有効</button></form></div></div><div class="entry"><div class="ess">盆前の欠品対策で在庫を積んだ年は、明けに廃棄が出て粗利がかえって沈んだ</div><div class="sub">なぜ：<b>盆明けの立ち上がりは需要が読みにくく、積んだ分がそのまま残る。欠品を恐れる気持ちのほうが、廃棄の記憶より強く働く。</b></div><div class="sub">使い方：<b>盆前の発注は前年実績の1.0倍を上限にする。欠品は許容し、廃棄を避ける側に倒す。</b></div><div class="meta"><span class="tag 失敗">失敗</span><span class="tag">業務用食材部</span><span>記録 業務用課 鈴木 ／ 見直し <span class="">2026-08-30</span></span><form class="inline" method="post"><input disabled type="hidden" name="action" value="review"><input disabled type="hidden" name="id" value="3525"><button disabled class="quiet" type="submit">まだ有効</button></form></div></div>
+
+<details class="write" >
+<summary>知識を書く</summary>
+
+<div class="rule">
+  <b>一行で書けないものは、まだ2つ以上が混ざっています。</b>分けて2件にしてください。<br>
+  「なぜ」の無い知識は、状況が変わったときに捨ててよいか判断できません。<br>
+  「どう使うか」の無い知識は、ただの感想になります。
+</div>
+
+<form method="post">
+  <input disabled type="hidden" name="action" value="add">
+  
+
+  <div class="two">
+    <div>
+      <label for="k_subject">部門</label>
+      <select disabled id="k_subject" name="subject" required><option value="全社">全社</option><option value="加工食品部">加工食品部</option><option value="低温食品部">低温食品部</option><option value="農産部">農産部</option><option value="水産部">水産部</option><option value="畜産部">畜産部</option><option value="菓子・飲料部">菓子・飲料部</option><option value="業務用食材部">業務用食材部</option></select>
+    </div>
+    <div>
+      <label for="k_type">種類</label>
+      <select disabled id="k_type" name="type" required><option value="判断">判断</option><option value="失敗">失敗</option><option value="コツ">コツ</option><option value="前提">前提</option></select>
+    </div>
+  </div>
+
+  <label for="essence">本質（一行・120字まで）</label>
+  <input disabled type="text" id="essence" name="essence" maxlength="120" required
+         placeholder="例：相場高のときは数量を追わず、赤字取引を止めて粗利を守る">
+
+  <label for="why">なぜそうなのか（200字まで）</label>
+  <textarea disabled id="why" name="why" maxlength="200" required
+            placeholder="例：農産は数量が減っても荷扱いの手間が減らない。数量を追うと人時だけ増えて粗利が沈む"></textarea>
+
+  <label for="how">どう使うか（200字まで）</label>
+  <textarea disabled id="how" name="how" maxlength="200" required
+            placeholder="例：原価率が前月比1pt以上悪化したら、まず赤字明細を洗って止める"></textarea>
+
+  <div class="two">
+    <div>
+      <label for="tags">タグ（空白区切り・任意）</label>
+      <input disabled type="text" id="tags" name="tags" placeholder="相場 粗利">
+    </div>
+    <div>
+      <label for="k_author">記録者</label>
+      <input disabled type="text" id="k_author" name="author" maxlength="30" required>
+    </div>
+  </div>
+
+  <div style="margin-top:16px"><button disabled type="submit">記録する</button></div>
+</form>
+</details>
+
+</div>
+</body>
+</html>

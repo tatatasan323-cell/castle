@@ -10,6 +10,7 @@ instance/data.db を作り直し、CSVを全部取り込み、ダッシュボー
 """
 
 import json
+import re
 import pathlib
 import subprocess
 import sqlite3
@@ -793,7 +794,34 @@ def _run(instance):
           codes[:3] and all(c != 429 for c in codes[:3]) and 429 in codes[3:],
           "返ってきたHTTP: %s" % codes)
 
+    print("")
+    print("【18】公開用の一式 ── 出したものに、城の半分が欠けていないか")
+    # ダッシュボードだけを公開すると、申し送りと知識の泉が
+    # 「公開されたものからは存在しない」ことになる。記事はその2つを語っているのに。
+    code, out = run(APP / "export_static.py")
+    check("公開用の一式を書き出せる", code == 0, "" if code == 0 else out.strip().splitlines()[-1][:160])
+
+    docs = APP.parent.parent / "docs"
+    want = ("index.html", "note.html", "knowledge.html", "guide.html")
+    missing = [n for n in want if not (docs / n).exists()]
+    check("4画面そろっている", not missing, "足りない: " + "、".join(missing))
+    if missing:
+        return report()
+
+    pages = {n: (docs / n).read_text(encoding="utf-8") for n in want}
+    check("知識の泉に中身がある", "盆前の欠品対策" in pages["knowledge.html"])
+    check("申し送りに中身がある", "数量減は意図的" in pages["note.html"])
+    dead = {n: len(re.findall(chr(34) + "/[a-z]", p)) for n, p in pages.items()}
+    check("押しても何も起きないリンクが残っていない", not any(dead.values()),
+          "、".join("%s:%d" % kv for kv in dead.items() if kv[1]))
+    for name in ("note.html", "knowledge.html"):
+        check("%s の書き込み口が閉じてある" % name, " disabled" in pages[name])
+        check("%s に書けない理由が書いてある" % name, "これは読むだけの見本です" in pages[name])
+    broken = [n for n, p in pages.items() if p.count("<h1>") != p.count("</h1>")]
+    check("HTMLの見出しが閉じている", not broken, "、".join(broken))
+
     return report()
+
 
 
 

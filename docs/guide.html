@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>使い方 ── 架空食品商事株式会社</title>
+<style>
+/* 城の見た目。全画面で共有する ── 変えるときはここ1枚だけ。
+   ビルド時に各テンプレートへ差し込むので、実行時の外部ファイル読み込みはゼロのまま。
+
+   イメージは「空中に投影されたステータス」。暗闇にぼうっと浮かぶ。
+
+   ただし **光らせるのは数字と線と縁だけ**。本文まで光らせると読めなくなる。
+   面は半透明にして、背後の微かな明かりを透かす。影で持ち上げず、光で浮かせる。 */
+
+:root{
+  --bg:#05080c;
+  --ink:#dfeef4;
+  --muted:#6f8794;
+
+  --accent:#5ee0f0;          /* 投影光。主指標と現在地にだけ */
+  --accent-dim:#2f8fa2;
+  --bar:#5ee0f0;
+  --prior:#8a7fc0;           /* 前年。当年（シアン）と目標（琥珀）のどちらとも別の色相にする */
+  --ok:#5fd6a4;
+  --warn:#e8b866;
+  --bad:#ff7a6b;
+
+  --card:rgba(17,28,38,.62);
+  --card-2:rgba(22,38,50,.74);
+  --line:rgba(94,224,240,.13);
+  --line-2:rgba(94,224,240,.26);
+  --code:rgba(4,10,16,.72);
+
+  --glow:0 0 18px rgba(94,224,240,.30);
+  --glow-soft:0 0 34px rgba(94,224,240,.16);
+}
+
+*{box-sizing:border-box}
+
+body{
+  margin:0;
+  color:var(--ink);
+  background:
+    /* 上からの投影光 */
+    radial-gradient(1100px 520px at 50% -220px, rgba(94,224,240,.13), transparent 72%),
+    radial-gradient(760px 420px at 12% 108%, rgba(80,140,220,.07), transparent 70%),
+    /* HUDの格子。ほとんど見えない濃さで空間を出す */
+    linear-gradient(rgba(94,224,240,.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(94,224,240,.028) 1px, transparent 1px),
+    var(--bg);
+  background-size:auto, auto, 44px 44px, 44px 44px, auto;
+  background-attachment:fixed;
+  font-family:"Yu Gothic UI","Yu Gothic","Hiragino Sans","Meiryo",system-ui,sans-serif;
+  font-size:15px;
+  line-height:1.75;
+  -webkit-font-smoothing:antialiased;
+}
+
+.wrap{max-width:1040px;margin:0 auto;padding:26px 22px 72px}
+
+nav{
+  display:flex;gap:18px;font-size:12.5px;letter-spacing:.03em;
+  padding-bottom:13px;margin-bottom:20px;
+  border-bottom:1px solid var(--line);
+}
+nav a{color:var(--muted);text-decoration:none;transition:color .18s,text-shadow .18s}
+nav a:hover{color:var(--accent);text-shadow:var(--glow)}
+nav b{color:var(--accent);font-weight:600;text-shadow:var(--glow)}
+
+.eyebrow{color:var(--muted);font-size:12px;letter-spacing:.14em}
+h1{font-size:23px;font-weight:600;margin:4px 0 4px;letter-spacing:.06em}
+.sub,.lead{color:var(--muted);font-size:12.5px}
+h2{
+  font-size:12.5px;font-weight:600;color:var(--accent-dim);
+  letter-spacing:.16em;margin:40px 0 12px;
+  padding-bottom:8px;border-bottom:1px solid var(--line);
+}
+h3{font-size:13.5px;font-weight:600;margin:20px 0 4px}
+
+.up{color:var(--ok)} .down{color:var(--bad)} .flat{color:var(--muted)}
+b,strong{font-weight:600}
+
+/* 面 ── 半透明。縁の上辺だけを光らせて、板が浮いているように見せる */
+.card,.none,.notice,.msg,.limits,details.howto{
+  position:relative;
+  background:var(--card);
+  border:1px solid var(--line);
+  border-radius:12px;
+  backdrop-filter:blur(7px);
+  -webkit-backdrop-filter:blur(7px);
+}
+
+table{width:100%;border-collapse:collapse}
+th,td{
+  padding:11px 12px;text-align:right;border-bottom:1px solid var(--line);
+  font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1;
+}
+th{color:var(--muted);font-size:11.5px;font-weight:500;letter-spacing:.07em;
+   border-bottom-color:var(--line-2)}
+td.name,th.name{text-align:left;white-space:nowrap}
+tbody tr{transition:background .15s}
+tbody tr:hover{background:rgba(94,224,240,.045)}
+tbody tr:last-child td{border-bottom:none}
+
+.none{padding:14px 18px;color:var(--muted);font-size:13.5px}
+
+.notice{border-left:2px solid var(--warn);padding:12px 18px;margin-top:18px;
+        font-size:13px;color:var(--muted)}
+.notice b{color:var(--warn);font-weight:600;text-shadow:0 0 14px rgba(232,184,102,.30)}
+
+.msg{padding:11px 16px;margin:16px 0;font-size:13px;border-left:2px solid var(--bad)}
+.msg.ok{border-left-color:var(--ok)}
+.msg.warn{border-left-color:var(--warn)}
+
+.tag{
+  border:1px solid var(--line-2);border-radius:3px;padding:1px 7px;
+  font-size:10.5px;letter-spacing:.07em;color:var(--muted);
+}
+
+code,pre{
+  background:var(--code);border:1px solid var(--line);border-radius:6px;
+  font-size:12.5px;font-family:ui-monospace,"Consolas","Menlo",monospace;color:var(--ink);
+}
+code{padding:1px 6px}
+pre{padding:12px 14px;overflow-x:auto;margin:8px 0;line-height:1.65}
+
+label{display:block;font-size:12px;color:var(--muted);letter-spacing:.05em;margin:14px 0 5px}
+input,select,textarea{
+  width:100%;padding:9px 11px;font:inherit;color:var(--ink);
+  background:rgba(4,10,16,.6);border:1px solid var(--line-2);border-radius:6px;
+}
+input:focus,select:focus,textarea:focus{
+  outline:none;border-color:var(--accent);box-shadow:0 0 0 1px rgba(94,224,240,.18), var(--glow-soft);
+}
+textarea{resize:vertical}
+button{
+  padding:10px 24px;font:inherit;font-weight:600;letter-spacing:.05em;
+  color:#04121a;background:var(--accent);border:0;border-radius:6px;cursor:pointer;
+  box-shadow:var(--glow);transition:filter .15s,box-shadow .15s;
+}
+button:hover{filter:brightness(1.1);box-shadow:0 0 26px rgba(94,224,240,.45)}
+button.quiet{
+  background:transparent;color:var(--muted);border:1px solid var(--line-2);
+  font-weight:400;padding:4px 12px;font-size:11.5px;box-shadow:none;
+}
+button.quiet:hover{color:var(--accent);border-color:var(--accent-dim);box-shadow:var(--glow-soft)}
+
+svg{display:block;width:100%;height:auto}
+/* 線は光らせる。ここが「投影されている」感じの主役 */
+svg polyline{filter:drop-shadow(0 0 5px rgba(94,224,240,.40))}
+
+.keys,.legend{color:var(--muted);font-size:11.5px;margin-top:10px;
+              display:flex;gap:18px;flex-wrap:wrap}
+.keys i{display:inline-block;width:16px;height:2px;vertical-align:3px;margin-right:6px}
+.keys i.dash{background:repeating-linear-gradient(90deg,var(--bar),var(--bar) 3px,transparent 3px,transparent 6px)}
+.keys i.dash-warn{background:repeating-linear-gradient(90deg,var(--warn),var(--warn) 4px,transparent 4px,transparent 7px)}
+
+details.howto{padding:0 22px;margin-top:18px}
+details.howto[open]{padding-bottom:18px}
+details.howto summary{
+  cursor:pointer;padding:14px 0;font-size:13.5px;font-weight:600;list-style:none;
+  letter-spacing:.05em;color:var(--muted);
+}
+details.howto summary:hover{color:var(--accent)}
+details.howto summary::-webkit-details-marker{display:none}
+details.howto summary::before{content:"▸ ";color:var(--accent)}
+details.howto[open] summary::before{content:"▾ "}
+details.howto p,details.howto li{font-size:13px;color:var(--muted);margin:2px 0}
+details.howto b{color:var(--ink)}
+details.howto ul{padding-left:1.2em;margin:5px 0}
+
+.limits{padding:4px 22px 16px;margin-top:12px}
+.limits ul{margin:10px 0 0;padding-left:1.2em;font-size:13px;color:var(--muted)}
+.limits li{margin-bottom:7px}
+.limits b{color:var(--ink)}
+
+footer{
+  margin-top:44px;color:var(--muted);font-size:11.5px;letter-spacing:.04em;
+  border-top:1px solid var(--line);padding-top:14px;
+}
+
+.wrap{max-width:780px}
+section{background:var(--card);border:1px solid var(--line);border-radius:12px;
+        padding:4px 24px 20px;margin-bottom:16px}
+section h2{margin-top:28px}
+ol,ul{padding-left:1.3em;margin:8px 0}
+li{margin-bottom:6px}
+th,td{text-align:left;vertical-align:top;font-size:13.5px}
+th{white-space:nowrap}
+.note{border-left:2px solid var(--warn);padding-left:14px;color:var(--muted);
+      font-size:13px;margin:12px 0;background:none;border-radius:0}
+.note b{color:var(--ink)}
+a{color:var(--bar)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<nav><a href="index.html">城を開く</a><b>使い方</b></nav>
+
+<div class="eyebrow">架空食品商事株式会社</div>
+<h1>城の使い方</h1>
+<div class="lead">
+  城は既存のシステムを置き換えません。販売管理・勤怠・会計の外側に、薄い横串を1枚かけるだけです。<br>
+  各システムはそのまま動かし続け、城はその出力を受けて、形を揃えて、繋ぎます。
+</div>
+
+<section>
+<h2>1. 毎日やること（3分）</h2>
+
+<ol>
+  <li>販売管理と勤怠のシステムから、CSVを落とす（どちらも既存の出力機能です）</li>
+  <li>そのファイルを <code>instance/incoming/</code> に置く</li>
+  <li>取り込む</li>
+</ol>
+
+<pre>python castle/app/import_csv.py --kind 売上     instance/incoming/A社*.csv
+python castle/app/import_csv.py --kind 労働時間 instance/incoming/B社*.csv</pre>
+
+<p>取り込みが終わったら、ダッシュボードを開くだけです。開くたびにその場で作り直すので、
+いつ見ても最新になっています。</p>
+
+<div class="note">
+  <b>ファイルを揃える必要はありません。</b>文字コードも、日付の書き方も、部門名の表記も、
+  並び順も、ベンダーごとに違ったままで構いません。揃えるのが城の仕事です。<br>
+  同じファイルを二度取り込んでも、記録は増えません（上書きされます）。
+</div>
+</section>
+
+<section>
+<h2>2. 月初にやること（1分）</h2>
+
+<p>会計が前月を締めたら、部門別損益のCSVを同じ場所に置いて取り込みます。
+これで粗利が実績に切り替わります。</p>
+
+<pre>python castle/app/import_csv.py --kind 売上原価 instance/incoming/C社*.csv</pre>
+
+<p>締まっていない当月は、直近の確定月の原価率を当てた<b>推定</b>です。画面の一番上にそう書いてあります。</p>
+</section>
+
+<section>
+<h2>3. 現場に書いてもらうこと</h2>
+
+<p>ダッシュボードは「どの部門が、どれだけ落ちたか」までしか出せません。
+<b>「なぜ」は現場にしかありません。</b>それを書く場所が申し送りです。</p>
+
+<ul>
+  <li>落ち込みが出た部門の担当者が、<b>気づいた時点で1〜2行</b>書く</li>
+  <li>書いたものは、その部門の要確認欄にそのまま並びます</li>
+  <li>後から書き換えられません。訂正は新しく書き足してください</li>
+</ul>
+
+<h3>書き方のコツ</h3>
+<table>
+  <tr><th>弱い書き方</th><th>効く書き方</th></tr>
+  <tr><td>売上が落ちています</td><td>数量減は意図的。相場高で赤字取引を止めている。8月下旬に戻る見込み</td></tr>
+  <tr><td>忙しかったです</td><td>盆前で休業の得意先が増え、1ルートの納品件数が落ちた。臨時要員は入れていない</td></tr>
+</table>
+
+<p><b>「見込み」と「打った手」を書くと、読む側が判断できます。</b>
+状況だけだと、結局その部門に聞き直すことになります。</p>
+</section>
+
+<section>
+<h2>4. 知識の泉 ── 数字と並ぶ、もう一本の泉</h2>
+
+<p>数字の泉が出すのは「<b>何が起きたか</b>」。知識の泉に貯めるのは
+「<b>この会社で、繰り返し効くこと</b>」です。判断、うまくいかなかった改善、
+現場の小さなコツ、新人が知らない前提。</p>
+
+<p><b>申し送りは流れるもの、知識は残るもの</b>と考えてください。
+「この件、また来年も同じことが起きるな」と思ったら、それは知識です。</p>
+
+<h3>書くときの3つの約束</h3>
+<table>
+  <tr><th>約束</th><th>なぜ</th></tr>
+  <tr>
+    <td><b>本質は一行（120字）</b></td>
+    <td>一行で書けないものは、まだ2つ以上が混ざっています。分けて2件にしてください。
+        ここが緩むと、後から誰も引けない読み物になります。</td>
+  </tr>
+  <tr>
+    <td><b>「なぜ」を必ず書く</b></td>
+    <td>理由の無い知識は、状況が変わったときに<b>捨ててよいか判断できません</b>。
+        永久に残り続けて、判断を狂わせます。</td>
+  </tr>
+  <tr>
+    <td><b>「どう使うか」を必ず書く</b></td>
+    <td>次に同じ場面が来たときの行動が書いていないと、ただの感想です。</td>
+  </tr>
+</table>
+
+<h3>古くなった知識は、覆す</h3>
+<p>方針が変わったら、<b>書き換えるのではなく「これを覆す」を押して新しく書きます。</b>
+古い方は現役から外れますが、消えません。<b>なぜ覆ったかが、いちばんの学びだからです。</b></p>
+
+<p>180日だれも見直していない知識は、画面の上で名指しされます。
+まだ有効なら「まだ有効」を押してください。
+<b>古い知識が現役の顔をしているのが、いちばん危険です。</b></p>
+
+<h3>探しに行かなくていい</h3>
+<p>知識は部門に紐づいています。その部門の数字が落ちた瞬間、
+<b>ダッシュボードの要確認欄に、その部門の知識が並びます。</b>
+必要な瞬間にだけ出てくるので、普段は忘れていて構いません。</p>
+
+<h3>さがす</h3>
+<p>表記は気にしなくて構いません。
+「くらうど」「kuraudo」「ｸﾗｳﾄﾞ」「ＣＬＯＵＤ」── どれで打っても同じものに当たります。</p>
+</section>
+
+<section>
+<h2>5. アクセスキー（人の出入り）</h2>
+
+<p>城はパスワードを作らせません。管理者が<b>アクセスキーを発行して渡す</b>方式です。</p>
+
+<pre>python castle/app/users.py --add    "農産部長 田中"
+python castle/app/users.py --list
+python castle/app/users.py --revoke "農産部長 田中"</pre>
+
+<ul>
+  <li>平文のキーは<b>発行したその画面にしか出ません</b>。控え損ねたら同じ名前で発行し直します（古いキーは失効します）</li>
+  <li>保存されているのはハッシュだけです。ファイルが漏れても、それだけでは入れません</li>
+  <li>異動・退職のときは <code>--revoke</code> で即座に切れます</li>
+  <li><b>キーは各自のものです。</b>貸し借りすると、記録に残る名前が実際の入力者とずれます</li>
+</ul>
+
+<div class="note">
+  <code>instance/users.json</code> があるかどうかで認証が入り切りします。
+  無ければ認証なし（自分のPCだけで使う状態）。有れば全員にキーが要ります。
+</div>
+</section>
+
+<section>
+<h2>6. 控え（バックアップ）</h2>
+
+<p>データは <code>instance/data.db</code> の1ファイルです。控えは1コマンドで取れます。</p>
+
+<pre>python castle/app/backup.py                 控えを取る
+python castle/app/backup.py --list          一覧
+python castle/app/backup.py --restore &lt;ファイル&gt; --yes   戻す</pre>
+
+<ul>
+  <li>取った直後に開き直して、<b>件数と整合性を確かめてから</b>「取れた」と表示します</li>
+  <li>サーバが動いたままでも、取りこぼしなく取れます</li>
+  <li><b>戻す直前に、いまのDBが自動で退避されます。</b>間違った控えを戻しても、そこから戻れます</li>
+  <li>戻す・古い控えを消す、は <code>--yes</code> が無ければ実行しません</li>
+</ul>
+
+<p>置き場は <code>instance/backups/</code> です。<b>別のディスクか共有フォルダにも複製してください。</b>
+同じPCの中にしかない控えは、PCが壊れた日にいっしょに消えます。</p>
+</section>
+
+<section>
+<h2>7. 困ったとき</h2>
+
+<table>
+  <tr><th>起きたこと</th><th>どうするか</th></tr>
+  <tr>
+    <td>取り込みで<br>「部門が対応表にない」と出た</td>
+    <td>正しい動きです（捨てずに報告しています）。合計行なら放っておいて構いません。
+        本物の部門なら <code>instance/config.json</code> の <code>aliases</code> にその表記を足します。</td>
+  </tr>
+  <tr>
+    <td>数字が古い</td>
+    <td>CSVを置き直して取り込みます。取り込みの履歴は
+        <code>import_csv.py --list</code> で見られます。</td>
+  </tr>
+  <tr>
+    <td>間違ったファイルを取り込んだ</td>
+    <td><code>import_csv.py --undo &lt;番号&gt;</code> で取り消せます。
+        ただし上書きした分は前の値に戻らないので、正しいCSVを入れ直してください。</td>
+  </tr>
+  <tr>
+    <td>サーバが起動しない</td>
+    <td>同じポートで既に動いていないか確認してください。
+        <code>--port 8766</code> のように変えても動きます。</td>
+  </tr>
+  <tr>
+    <td>全部おかしくなった</td>
+    <td>控えから戻します。取り込み元のCSVが残っていれば、
+        <code>verify.py</code> で作り直すこともできます。</td>
+  </tr>
+</table>
+</section>
+
+<section>
+<h2>8. この城が、やらないこと</h2>
+
+<ul>
+  <li><b>判断しません。</b>数字と内訳と確認すべきことまでを並べます。決めるのは人です</li>
+  <li><b>勝手に何かを送りません。</b>メールも発注も行いません</li>
+  <li><b>取り消せない操作を自動でやりません。</b>削除・復旧・外部への公開は、必ず人が明示します</li>
+  <li><b>既存システムを置き換えません。</b>各ベンダーのシステムはそのまま使い続けます</li>
+</ul>
+</section>
+
+</div>
+</body>
+</html>
