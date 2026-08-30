@@ -94,6 +94,48 @@ def load_purchase(conn):
     return out
 
 
+def load_stock(conn):
+    """週次の在庫。部門別に入っているが、金繰りで見るのは全社の合計。"""
+    out = {}
+    for row in conn.execute(
+            "SELECT occurred_at, amount FROM records WHERE kind='在庫' AND amount IS NOT NULL"):
+        out[row["occurred_at"]] = out.get(row["occurred_at"], 0.0) + float(row["amount"])
+    return out
+
+
+def daily_stock(conn, cfg, days=None, window=7):
+    """日次の在庫。**週次までが実データ、そのあいだは置いた値。**
+
+    置き方は着地見込みと同じ考え方 ── 予測モデルは使わない。
+    直近の実データから **在庫日数（在庫 ÷ 日商原価）** を取り、その日数を、
+    その日の日商原価に当てる。
+
+    **金額を日割りしない。率（日数）を運ぶ。**
+    月次の原価率を日次売上に当てるのと、まったく同じ形である。
+    仕入を足して原価を引く積み上げにしないのは、廃棄も棚卸差異も拾えず、
+    週をまたぐほど実データから離れていくため。在庫日数なら、実データに繋ぎ直せる。
+    """
+    if days is None:
+        days = build(conn, cfg)["days"]
+    stock = load_stock(conn)
+    rows = sorted(days, key=lambda d: d["date"])
+
+    costs, out = [], {}
+    held = None                      # 直近の実データから取った在庫日数
+    for row in rows:
+        costs.append(row["sales"] - row["gross"])
+        daily_cost = sum(costs[-window:]) / len(costs[-window:])
+        if row["date"] in stock:
+            amount = stock[row["date"]]
+            held = (amount / daily_cost) if daily_cost else held
+            out[row["date"]] = {"amount": amount, "settled": True,
+                                "days_of_stock": held, "daily_cost": daily_cost}
+        elif held is not None:
+            out[row["date"]] = {"amount": held * daily_cost, "settled": False,
+                                "days_of_stock": held, "daily_cost": daily_cost}
+    return out
+
+
 def _calendar_days(month):
     year, mon = int(month[:4]), int(month[5:7])
     first = datetime.date(year, mon, 1)
@@ -178,7 +220,7 @@ def build_ladder(cfg, month, trial):
     }
 
 
-def build_cash(cfg, month, balances, buys, by_date, ladder_block, yoy_offset):
+def build_cash(cfg, month, balances, buys, by_date, ladder_block, yoy_offset, stock=None):
     """金は回るか。残高は確定した月末のものしか無い ── そこを画面でも隠さない。"""
     names = (cfg.accounting or {}).get("balance", {})
     settled = sorted(m for m in balances if m <= month["month"])
@@ -190,6 +232,14 @@ def build_cash(cfg, month, balances, buys, by_date, ladder_block, yoy_offset):
     def at(source, key):
         return balances.get(source, {}).get(names.get(key, key), 0.0)
 
+    stock = stock or {}
+
+    def stock_at(month_key):
+        """その月末に間に合っている、いちばん新しい実データ。**推定は混ぜない。**"""
+        end = "%s-31" % month_key
+        got = [d for d in stock if d <= end]
+        return (max(got), stock[max(got)]) if got else (None, 0.0)
+
     out = {}
     for key in names:
         now = at(latest, key)
@@ -197,6 +247,12 @@ def build_cash(cfg, month, balances, buys, by_date, ladder_block, yoy_offset):
         out[key] = {"amount": now, "prev": before,
                     "change": (now - before) if before else None,
                     "vs_prev": ((now / before - 1) * 100) if before else None}
+
+    stock_at_latest, stock_now = stock_at(latest)
+    stock_at_prev, stock_before = stock_at(prev) if prev else (None, None)
+    out["棚卸資産"] = {"amount": stock_now, "prev": stock_before,
+                    "change": (stock_now - stock_before) if stock_before else None,
+                    "vs_prev": ((stock_now / stock_before - 1) * 100) if stock_before else None}
 
     span = _calendar_days(latest)
     m_sales = sum(v["sales"] for d, v in by_date.items() if d[:7] == latest)
@@ -216,8 +272,8 @@ def build_cash(cfg, month, balances, buys, by_date, ladder_block, yoy_offset):
 
     working = out["売掛金"]["amount"] + out["棚卸資産"]["amount"] - out["買掛金"]["amount"]
     working_prev = None
-    if prev:
-        working_prev = at(prev, "売掛金") + at(prev, "棚卸資産") - at(prev, "買掛金")
+    if prev and stock_before is not None:
+        working_prev = at(prev, "売掛金") + stock_before - at(prev, "買掛金")
 
     shift = datetime.timedelta(days=yoy_offset)
 
@@ -238,12 +294,16 @@ def build_cash(cfg, month, balances, buys, by_date, ladder_block, yoy_offset):
     parts = {}
     if prev:
         for key, sign in (("売掛金", 1), ("棚卸資産", 1), ("買掛金", -1)):
-            parts[key] = sign * (at(latest, key) - at(prev, key))
+            if key == "棚卸資産":
+                parts[key] = (stock_now - stock_before) if stock_before is not None else 0.0
+            else:
+                parts[key] = sign * (at(latest, key) - at(prev, key))
     cash_end = out["現預金"]["amount"] + ladder_block["net"] + ladder_block["depreciation"] - wc_change
 
     return dict(out, ccc=ccc, working_capital=working, working_capital_prev=working_prev,
                 working_capital_change=wc_change, working_capital_parts=parts,
                 cash_end_forecast=cash_end, as_of=latest,
+                stock_settled_at=stock_at_latest,
                 purchase={"actual": buy_actual, "forecast": buy_forecast, "last_year": buy_ly,
                           "vs_ly": ((buy_forecast / buy_ly - 1) * 100) if buy_ly else None,
                           "series": [(d, buys.get(d, 0.0)) for d in sorted(by_date)]})
@@ -435,8 +495,10 @@ def build(conn, cfg, yoy_offset=364):
     balances = load_free(conn, "残高")
     buys = load_purchase(conn)
     ladder_block = build_ladder(cfg, month_block, trial)
-    cash_block = build_cash(cfg, month_block, balances, buys, by_date, ladder_block, yoy_offset)
+    cash_block = build_cash(cfg, month_block, balances, buys, by_date, ladder_block,
+                            yoy_offset, load_stock(conn))
 
     return {"days": days, "month": month_block, "ladder": ladder_block, "cash": cash_block,
+            "stock": daily_stock(conn, cfg, days),
             "departments": departments,
             "series_months": series_months, "monthly_by_dept": by_dept}

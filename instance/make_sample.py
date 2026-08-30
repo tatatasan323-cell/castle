@@ -219,12 +219,13 @@ SPECIAL = {
     "2025-06": {"固定資産売却益": 8000},
 }
 # 月末残高（千円）。月商およそ38億の会社として置いた
-BALANCE = {
-    "現金及び預金": 1_480_000, "売掛金": 4_050_000, "棚卸資産": 1_310_000,
+BALANCE = {                            # 会計が月末に出す残高。**棚卸資産はここに無い**
+    "現金及び預金": 1_480_000, "売掛金": 4_050_000,
     "買掛金": 3_020_000, "未払金": 480_000, "短期借入金": 2_000_000,
 }
 OPENING = {                            # 期首（最初の月の前月末）。ここから流れで積む
     "現金及び預金": 1_620_000_000, "売掛金": 3_900_000_000, "棚卸資産": 1_240_000_000,
+    # 棚卸資産は週次で別に出す（下の write_stock）。ここでは期首の積み出しにだけ使う
     "買掛金": 2_950_000_000, "未払金": 470_000_000, "短期借入金": 2_260_000_000,
 }
 REPAY = 20_000_000                     # 毎月の約定返済
@@ -273,6 +274,51 @@ def buy_of(code, day, sales):
     return int(sales * cost_rate(code, day.strftime("%Y-%m")) * (0.94 + 0.12 * ((day.day % 7) / 6)))
 
 
+def write_stock(path, rows, issued):
+    """週次の在庫表。**会計ではなく販売管理から出る。**
+
+    在庫は現場が数える ── 週に一度、各週の最終営業日に締めて金額を出す。
+    会計の月末残高より細かく、日次ほど細かくはない。実務でよくある粒度。
+
+    値は流れから積む（前週末 ＋ 仕入 − 売上原価 ＋ 棚卸差異）。
+    係数で置くと、仕入や原価と繋がらない数字になる。
+    """
+    share, cost_total = {}, 0
+    for code, _name, day, sales, _slips in rows:
+        c = int(sales * cost_rate(code, day.strftime("%Y-%m")))
+        share[code] = share.get(code, 0) + c
+        cost_total += c
+    opening = {code: OPENING["棚卸資産"] * v / cost_total for code, v in share.items()}
+
+    by_day = {}
+    for code, name, day, sales, _slips in rows:
+        by_day.setdefault(day, []).append(
+            (code, name, buy_of(code, day, sales), int(sales * cost_rate(code, day.strftime("%Y-%m")))))
+
+    rnd = random.Random(20260701)
+    state = dict(opening)
+    lines = ["■週次在庫表　出力日:%s" % issued.strftime("%Y/%m/%d"),
+             "部門コード,部門名,棚卸日,在庫金額（税抜）"]
+    written = 0
+    days = sorted(by_day)
+    for i, day in enumerate(days):
+        for code, _name, buy, cost in by_day[day]:
+            state[code] += buy - cost
+        # 週が実際に終わった日にだけ出す。データの最終日は「週の終わり」ではない ──
+        # そこで棚卸したことにすると、いちばん新しい日がいつも実データになってしまい、
+        # 「週次までが実、その先は置いた値」という肝心の形が消える。
+        last_of_week = (i + 1 < len(days)
+                        and days[i + 1].isocalendar()[1] != day.isocalendar()[1])
+        if not last_of_week:
+            continue
+        for code, name, _b, _c in sorted(by_day[day]):
+            state[code] *= 1.0 + rnd.uniform(-0.004, 0.004)      # 実地の棚卸差異
+            lines.append("%s,%s,%s,%d" % (code, name, day.strftime("%Y/%m/%d"), int(state[code])))
+            written += 1
+    path.write_bytes((CRLF.join(lines) + CRLF).encode("cp932"))
+    return written
+
+
 def write_balance(months, rows, hours_rows):
     """月末残高。**流れから積み上げて作る。**
 
@@ -316,18 +362,15 @@ def write_balance(months, rows, hours_rows):
     ordered = sorted(months)
     every = sorted(sales_m)
     state = dict(OPENING)
-    rnd = random.Random(20260630)
     written = 0
     for month in every:
         before = every[every.index(month) - 1] if every.index(month) else None
         collect = (sales_m.get(before, sales_m[month])
                    * COLLECT.get(month, COLLECT_DEFAULT))   # 回収は1か月遅れ
         pay = buy_m.get(before, buy_m[month])                      # 支払も1か月遅れ
-        drift = 1.0 + rnd.uniform(-0.004, 0.004)                   # 棚卸差異
 
         state["売掛金"] += sales_m[month] - collect
         state["買掛金"] += buy_m[month] - pay
-        state["棚卸資産"] = (state["棚卸資産"] + buy_m[month] - cost_m[month]) * drift
         state["未払金"] = sga_of(month) * 3.0                       # 経費のおよそ3か月ぶん
         state["短期借入金"] -= REPAY
         nonop = sum(NONOP_DRIFT.get(month, {}).get(k, 1.0) * v * 1000
@@ -387,8 +430,9 @@ def main():
                            if len({d for _c, _n, d, _s, _x in sales_rows if d.strftime("%Y-%m") == m}) < 15})
         n5 = write_trial(months)
         n6 = write_balance(months, sales_rows, hours_rows)
-        print("%s: 売上 %d行 ／ 勤怠 %d行 ／ 部門損益 %dヶ月 ／ 仕入 %d行 ／ 試算表 %dヶ月 ／ 月末残高 %dヶ月"
-              % (suffix, n1, n2, n3, n4, n5, n6))
+        n7 = write_stock(OUT / ("A社販売管理_週次在庫_%s.csv" % suffix), sales_rows, issued)
+        print("%s: 売上 %d行 ／ 勤怠 %d行 ／ 部門損益 %dヶ月 ／ 仕入 %d行 ／ 試算表 %dヶ月 ／ 月末残高 %dヶ月 ／ 週次在庫 %d行"
+              % (suffix, n1, n2, n3, n4, n5, n6, n7))
 
     print("当年 %d営業日（%s 〜 %s）／ 前年は当月末ぶんまで %d営業日" 
           % (len(current), current[0][1], current[-1][1], len(prior)))

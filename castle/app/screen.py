@@ -340,6 +340,35 @@ def cash(book):
            steps, money(block["cash_end_forecast"])))
 
 
+def stock(book):
+    """在庫。**週次までが実データ、その先は在庫日数を当てた想定値。**
+
+    どこまでが事実で、どこからが置いた値か ── そこを書かない画面は、
+    いずれ「毎日数えている」と誤読される。
+    """
+    daily = book.get("stock") or {}
+    if not daily:
+        return ""
+    days = sorted(daily)
+    last_real = max((d for d in days if daily[d]["settled"]), default=None)
+    if last_real is None:
+        return ""
+    now = daily[days[-1]]
+    real = daily[last_real]
+    guessed = [d for d in days if d > last_real]
+    return (
+        '<div class="breakdown">'
+        '<div><div class="k">最後に数えた在庫</div><div class="v">%s</div>'
+        '<div class="n">%s 時点（週次）／ 在庫日数 %.1f日</div></div>'
+        '<div><div class="k">いまの在庫（想定）</div><div class="v">%s</div>'
+        '<div class="n">%s ／ 数えた日から %d営業日ぶん、在庫日数を当てたもの</div></div>'
+        '<div><div class="k">在庫日数</div><div class="v">%.1f日</div>'
+        '<div class="n">在庫 ÷ 日商原価。短いほど、同じ商売でも金が寝ません</div></div>'
+        "</div>"
+        % (money(real["amount"]), last_real, real["days_of_stock"],
+           money(now["amount"]), days[-1], len(guessed), now["days_of_stock"]))
+
+
 def purchase(book):
     """仕入。売上の裏側で、いちばん先に動く数字。"""
     buy = book["cash"]["purchase"]

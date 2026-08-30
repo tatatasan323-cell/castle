@@ -9,6 +9,7 @@ instance/data.db を作り直し、CSVを全部取り込み、ダッシュボー
 終了コード 0=全部通った / 1=落ちたものがある。
 """
 
+import datetime
 import json
 import re
 import pathlib
@@ -56,6 +57,7 @@ def _run(instance):
     steps = [
         ("売上", sorted(incoming.glob("A社*売上*.csv"))),
         ("仕入", sorted(incoming.glob("A社*仕入*.csv"))),
+        ("在庫", sorted(incoming.glob("A社*週次在庫*.csv"))),
         ("労働時間", sorted(incoming.glob("B社*.csv"))),
         ("部門損益", sorted(incoming.glob("C社*部門別損益*.csv"))),
         ("試算表", sorted(incoming.glob("C社*試算表*.csv"))),
@@ -1008,49 +1010,68 @@ def _run(instance):
           conn.execute("SELECT COUNT(*) FROM records WHERE id > ?", (mark,)).fetchone()[0] == 0)
 
     print("")
-    print("【21】貸借と損益が繋がっているか")
+    print("【21】在庫 ── 週次で実、あいだは在庫日数で置く")
     # 表示が壊れていないことと、数字が互いに整合していることは別。
-    # 残高を流れと別々に作れば、CCCも運転資本も「それらしいだけの数字」になる。
-    bal = pnl.load_free(conn, "残高")
-    buys = pnl.load_purchase(conn)
-    # この節より上で book は summary.json に差し替わっている。ここで組み直す。
+    # 在庫を流れと別々に作れば、CCCも運転資本も「それらしいだけの数字」になる。
     ledger = pnl.build(conn, cfg)
     by_day = {d["date"]: d for d in ledger["days"]}
-    names = cfg.accounting["balance"]
+    buys = pnl.load_purchase(conn)
+    stock = pnl.load_stock(conn)
 
-    months = sorted(bal)
-    checked = 0
-    for n in range(1, len(months)):
-        before, now = months[n - 1], months[n]
-        if before[:4] != now[:4] or int(now[5:7]) != int(before[5:7]) + 1:
-            continue
-        days = sorted(d for d in by_day if d[:7] == now)
-        if not days:
-            continue
-        # 在庫の積み上げ：前月末 ＋ 仕入 − 売上原価
-        rolled = bal[before][names["棚卸資産"]]
-        for day in days:
-            rolled += buys.get(day, 0.0) - (by_day[day]["sales"] - by_day[day]["gross"])
-        real = bal[now][names["棚卸資産"]]
-        gap = abs(rolled - real) / real * 100 if real else 100.0
-        checked += 1
-        check("%s の棚卸資産が、仕入と売上原価の流れと繋がっている" % now, gap <= 1.5,
-              "積み上げ %.2f億 ／ 会計 %.2f億 ／ ずれ %.1f%%"
-              % (rolled / 1e8, real / 1e8, gap))
-    check("繋がりを確かめられる月がある", checked >= 2, "%d月ぶん" % checked)
+    check("在庫が入っている", len(stock) >= 8, "%d時点" % len(stock))
+    # 年をまたぐ隙間（前年データと当年データのあいだ）は数えない
+    gaps = sorted({g for g in
+                   ((datetime.date.fromisoformat(b) - datetime.date.fromisoformat(a)).days
+                    for a, b in zip(sorted(stock), sorted(stock)[1:])) if g < 60})
+    check("在庫は週次で上がってくる（7日おき）", gaps and max(gaps) <= 7 and min(gaps) >= 5,
+          "間隔 %s日" % "／".join(str(g) for g in gaps))
+    check("会計の月末残高に棚卸資産を二重に持っていない",
+          "棚卸資産" not in (cfg.accounting.get("balance") or {}),
+          "残高側にも棚卸資産がある ── 出どころが2つになる")
 
-    # 売掛金：前月末 ＋ 売上 − 回収。回収は持っていないので、回転日数が暴れないことだけ見る
-    ratios = []
-    for month_key in months:
-        days = [d for d in by_day if d[:7] == month_key]
-        if not days:
-            continue
-        sales = sum(by_day[d]["sales"] for d in days)
-        if sales:
-            ratios.append(bal[month_key][names["売掛金"]] / sales)
-    check("売掛金と売上の比が、月ごとに暴れていない",
-          bool(ratios) and (max(ratios) - min(ratios)) / (sum(ratios) / len(ratios)) < 0.30,
-          "月商比 %s" % "／".join("%.2f" % r for r in ratios))
+    # 週次の実データが、仕入と売上原価の流れと繋がっているか
+    stamps = sorted(stock)
+    worst, worst_at = 0.0, ""
+    for before, now in zip(stamps, stamps[1:]):
+        if (datetime.date.fromisoformat(now) - datetime.date.fromisoformat(before)).days > 60:
+            continue                       # 前年データと当年データのあいだは繋がらない
+        days = [d for d in by_day if before < d <= now]
+        rolled = stock[before] + sum(buys.get(d, 0.0) - (by_day[d]["sales"] - by_day[d]["gross"])
+                                     for d in days)
+        gap = abs(rolled - stock[now]) / stock[now] * 100 if stock[now] else 100.0
+        if gap > worst:
+            worst, worst_at = gap, now
+    check("週次の在庫が、仕入と売上原価の流れと繋がっている", worst <= 2.0,
+          "いちばんずれた週 %s で %.1f%%" % (worst_at, worst))
+
+    # 日次の埋め方
+    daily = pnl.daily_stock(conn, cfg)
+    check("日次の在庫が出ている", len(daily) >= 60, "%d日" % len(daily))
+    fixed = [d for d, v in daily.items() if v["settled"]]
+    check("確定した日と、置いた日が区別されている",
+          len(fixed) == len(stock) and len(fixed) < len(daily),
+          "確定 %d日 ／ 全体 %d日" % (len(fixed), len(daily)))
+    check("確定した日は、実データそのままになっている",
+          all(abs(daily[d]["amount"] - stock[d]) < 1.0 for d in fixed))
+
+    # 置いた日は「在庫日数 × 日商原価」── 金額を日割りしていない
+    guessed = [d for d in sorted(daily) if not daily[d]["settled"]]
+    check("置いた日には、根拠の在庫日数が付いている",
+          all(daily[d].get("days_of_stock") for d in guessed))
+    check("置いた値が、日商原価に連動している",
+          all(abs(daily[d]["amount"]
+                  - daily[d]["days_of_stock"] * daily[d]["daily_cost"]) < 1.0 for d in guessed))
+
+    # 推定を、確定の顔をして混ぜない
+    cash = ledger["cash"]
+    check("CCCと運転資本は、確定した在庫で計算している",
+          cash["stock_settled_at"] in stock
+          and abs(cash["棚卸資産"]["amount"] - stock[cash["stock_settled_at"]]) < 1.0,
+          "使った時点 %s" % cash.get("stock_settled_at"))
+
+    board = (instance / "out" / "dashboard.html").read_text(encoding="utf-8")
+    check("どこまでが実で、どこからが置いた値かが画面に書いてある",
+          "在庫日数" in board and "週次" in board)
 
     return report()
 

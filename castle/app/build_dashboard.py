@@ -391,6 +391,22 @@ LIMITED = ('<div class="notice">この画面は <b>%s</b> のぶんだけです�
            '<b>全社の鍵でなければ開きません。</b></div>')
 
 
+def _stock_view(book):
+    """在庫の要点。判定と、記事との突き合わせが読む。"""
+    daily = book.get("stock") or {}
+    if not daily:
+        return None
+    days = sorted(daily)
+    settled = max((d for d in days if daily[d]["settled"]), default=None)
+    if settled is None:
+        return None
+    return {"settled_at": settled, "settled_amount": daily[settled]["amount"],
+            "settled_days": daily[settled]["days_of_stock"],
+            "latest_at": days[-1], "latest_amount": daily[days[-1]]["amount"],
+            "latest_days": daily[days[-1]]["days_of_stock"],
+            "guessed_days": sum(1 for d in days if d > settled)}
+
+
 def build(instance, verbose=False, nav=False, scope=None):
     """scope に部門名の一覧を渡すと、その部門ぶんだけを描く。
 
@@ -517,6 +533,7 @@ def build(instance, verbose=False, nav=False, scope=None):
     # 部門別の推移は**日次のまま**並べる。月次に丸めるのは会計の都合であって、経営の都合ではない。
     chart_days = [d for d in dates if d >= shift(dates[-1], 120)]
     buy_by_day = dict(book["cash"]["purchase"]["series"]) if book["cash"] else {}
+    stock_by_day = book.get("stock") or {}
     amount_series, rate_series = [], []
     for dept in sorted(measured, key=lambda d: -results[d["name"]]["gross"]):
         name = dept["name"]
@@ -540,13 +557,22 @@ def build(instance, verbose=False, nav=False, scope=None):
             breakdown=screen.breakdown(month),
             ladder=screen.ladder(book),
             cash=screen.cash(book),
-            purchase=screen.purchase(book),
+            purchase=screen.purchase(book) + screen.stock(book),
             # 前年の日付まで1本の線に繋ぐと、年をまたいだ折れ線になって傾向が読めない。
             buychart=screen.series_chart(
                 chart_days,
                 [("仕入（7営業日移動平均）",
                   screen.moving_average([buy_by_day.get(d) for d in chart_days]))],
-                lambda v: "%.2f億" % (v / 1e8), "c-buy") if book["cash"] else "")
+                lambda v: "%.2f億" % (v / 1e8), "c-buy") if book["cash"] else "",
+            # 仕入（日に約1.3億）と在庫（約12億）を同じ軸に載せると、仕入が潰れる。
+            stockchart=screen.series_chart(
+                chart_days,
+                [("在庫（週次の実データ）",
+                  [stock_by_day.get(d, {}).get("amount")
+                   if stock_by_day.get(d, {}).get("settled") else None for d in chart_days]),
+                 ("在庫（在庫日数を当てた想定）",
+                  [stock_by_day.get(d, {}).get("amount") for d in chart_days])],
+                lambda v: "%.2f億" % (v / 1e8), "c-stock") if stock_by_day else "")
         trend_block = string.Template(
             (PART / "_trend.html").read_text(encoding="utf-8")).substitute(
             voyage=screen.voyage(month),
@@ -604,6 +630,7 @@ def build(instance, verbose=False, nav=False, scope=None):
             for name, r in results.items()},
         "trend_cards": trend_cards,
         "buy_chart_range": [chart_days[0], chart_days[-1]] if chart_days else None,
+        "stock_view": _stock_view(book),
         "ladder": book["ladder"]["steps"],
         "cash": ({k: v for k, v in book["cash"].items() if k != "purchase"}
                  | {"purchase": {k: v for k, v in book["cash"]["purchase"].items()

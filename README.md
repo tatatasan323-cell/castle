@@ -122,6 +122,7 @@ python castle/app/import_csv.py --undo 3
 |---|---|---|---|
 | 売上 | A社販売管理 | 日次 | 部門 |
 | 仕入 | A社販売管理 | 日次 | 部門 |
+| 在庫 | A社販売管理 | **週次**（各週の最終営業日） | 部門 |
 | 労働時間 | B社勤怠 | 日次 | 部門 |
 | 部門損益 | C社会計 | 月次 | 部門 |
 | 試算表 | C社会計 | 月次 | **科目** |
@@ -133,6 +134,7 @@ python castle/app/import_csv.py --undo 3
 python castle/app/import_csv.py --kind 試算表 instance/incoming/C社会計_試算表_*.csv
 python castle/app/import_csv.py --kind 残高   instance/incoming/C社会計_月末残高_*.csv
 python castle/app/import_csv.py --kind 仕入   instance/incoming/A社販売管理_仕入日報_*.csv
+python castle/app/import_csv.py --kind 在庫   instance/incoming/A社販売管理_週次在庫_*.csv
 ```
 
 ## 入口が吸収するもの
