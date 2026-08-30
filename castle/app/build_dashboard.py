@@ -30,6 +30,9 @@ import screen
 TEMPLATE = db.ROOT / "castle" / "templates" / "dashboard.html"
 # 見た目は1枚にまとめてビルド時に差し込む。実行時の外部ファイル読み込みはゼロのまま。
 THEME = db.ROOT / "castle" / "templates" / "theme.css"
+# 全社の節と推移の節は別ファイル。部門を絞ったら、節ごと出さない／別の版を出す。
+# 条件分岐をmarkupに書かず、見せるものが違うなら別のテンプレートにする。
+PART = db.ROOT / "castle" / "templates"
 
 # サーバ配信のときだけ出す。単体ファイルとして配ったときにリンク切れを作らないため。
 NAV = ('<nav><b>経営ステータス</b>'
@@ -295,7 +298,7 @@ def build_ranking(results):
             '<td class="barcell"><div class="bar"><span class="fill" style="width:%.1f%%"></span>'
             '<i class="target" style="left:%.1f%%"></i></div></td>'
             "<td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>"
-            % (name, yen(r["pph"]), 100 * r["pph"] / scale, 100 * r["target"] / scale,
+            % (escape(name), yen(r["pph"]), 100 * r["pph"] / scale, 100 * r["target"] / scale,
                pct(r["vs_target"]), "%.1f%%" % (r["margin"] * 100), yen(r["sales_pph"]), move)
         )
     return (
@@ -383,7 +386,17 @@ def main():
     build(db.instance_dir(args.instance), verbose=True)
 
 
-def build(instance, verbose=False, nav=False):
+LIMITED = ('<div class="notice">この画面は <b>%s</b> のぶんだけです。'
+           '全社の数字（着地見込み・利益の階段・金の巡り）は、'
+           '<b>全社の鍵でなければ開きません。</b></div>')
+
+
+def build(instance, verbose=False, nav=False, scope=None):
+    """scope に部門名の一覧を渡すと、その部門ぶんだけを描く。
+
+    None は全社。**部門を絞ったときは、全社の集計を出さない** ──
+    部門別の欄だけを見せて全社の合計を残すと、引き算で全社が復元できてしまう。
+    """
     conn = db.connect(instance)
     cfg = config_mod.load(instance)
     metric = cfg.metric
@@ -396,6 +409,11 @@ def build(instance, verbose=False, nav=False):
     measured = [d for d in cfg.measured() if d["name"] in data]
     if not measured:
         raise SystemExit("売上・労働時間・原価の3つが揃っている部門がありません。")
+    if scope is not None:
+        allowed = set(scope)
+        measured = [d for d in measured if d["name"] in allowed]
+        if not measured:
+            raise SystemExit("この鍵で見てよい部門が、データの中にありません。")
 
     dates = sorted({d for dept in measured for d in data[dept["name"]]})
     window = metric["window_days"]
@@ -426,6 +444,11 @@ def build(instance, verbose=False, nav=False):
 
     # ── 経営者の問いに答える計算。ここがこの画面の主役になる ──
     book = pnl.build(conn, cfg, metric["yoy_offset_days"])
+    if scope is not None:
+        # 計算は全社ぶん回るが、**画面に渡すのは見てよい部門だけ**にする。
+        # ここを絞り忘れると、全社の集計を伏せても部門別の欄から復元できてしまう。
+        book = dict(book, departments={k: v for k, v in book["departments"].items()
+                                       if k in set(scope)})
     month = book["month"]
     if month is None:
         raise SystemExit("当月のデータがありません。")
@@ -456,6 +479,8 @@ def build(instance, verbose=False, nav=False):
         limits.append("<li>売上と労働時間の片方しか無い日付×部門が %d件あり、除外した。</li>" % half)
 
     notes = load_notes(conn, shift(dates[-1], 30))
+    if scope is not None:
+        notes = [r for r in notes if r["subject"] in set(scope)]
     notes_by_dept = {}
     for row in notes:
         notes_by_dept.setdefault(row["subject"], []).append(row)
@@ -502,6 +527,42 @@ def build(instance, verbose=False, nav=False):
         amount_series.append((name, screen.moving_average(gross)))
         rate_series.append((name, rate))
 
+    dept_charts = {
+        "dept_amount": screen.series_chart(chart_days, amount_series,
+                                           lambda v: "%.0f万" % (v / 1e4), "c-amount"),
+        "dept_rate": screen.series_chart(chart_days, rate_series,
+                                         lambda v: "%.1f%%" % v, "c-rate"),
+    }
+    if scope is None:
+        company_block = string.Template(
+            (PART / "_company.html").read_text(encoding="utf-8")).substitute(
+            landing=screen.landing(month),
+            breakdown=screen.breakdown(month),
+            ladder=screen.ladder(book),
+            cash=screen.cash(book),
+            purchase=screen.purchase(book),
+            # 前年の日付まで1本の線に繋ぐと、年をまたいだ折れ線になって傾向が読めない。
+            buychart=screen.series_chart(
+                chart_days,
+                [("仕入（7営業日移動平均）",
+                  screen.moving_average([buy_by_day.get(d) for d in chart_days]))],
+                lambda v: "%.2f億" % (v / 1e8), "c-buy") if book["cash"] else "")
+        trend_block = string.Template(
+            (PART / "_trend.html").read_text(encoding="utf-8")).substitute(
+            voyage=screen.voyage(month),
+            actual_days=month["actual_days"], remaining_days=month["remaining_days"],
+            **dept_charts)
+        howto_block = (PART / "_howto.html").read_text(encoding="utf-8")
+        health_block = ('<section><h2>正常に回っているか</h2>%s</section>'
+                        % screen.health(month, whole["pph"], whole_target,
+                                        whole["vs_target"], build_ranking(results)))
+    else:
+        company_block = ""
+        trend_block = string.Template(
+            (PART / "_trend_dept.html").read_text(encoding="utf-8")).substitute(**dept_charts)
+        howto_block = (PART / "_howto_dept.html").read_text(encoding="utf-8")
+        health_block = ""
+
     html = string.Template(TEMPLATE.read_text(encoding="utf-8")).substitute(
         theme=THEME.read_text(encoding="utf-8"),
         company=cfg.company,
@@ -509,29 +570,12 @@ def build(instance, verbose=False, nav=False):
         last_actual=month["last_actual_date"],
         actual_days=month["actual_days"], remaining_days=month["remaining_days"],
         nav=(NAV if nav else ""),
-        notice=notice,
-        landing=screen.landing(month),
-        breakdown=screen.breakdown(month),
-        ladder=screen.ladder(book),
-        cash=screen.cash(book),
-        purchase=screen.purchase(book),
-        # 前年の日付まで1本の線に繋ぐと、年をまたいだ折れ線になって傾向が読めない。
-        # 部門別グラフと同じ期間（直近120日）に揃える。
-        buychart=screen.series_chart(
-            chart_days,
-            [("仕入（7営業日移動平均）",
-              screen.moving_average([buy_by_day.get(d) for d in chart_days]))],
-            lambda v: "%.2f億" % (v / 1e8), "c-buy") if book["cash"] else "",
-        voyage=screen.voyage(month),
-        dept_amount=screen.series_chart(
-            chart_days, amount_series,
-            lambda v: "%.0f万" % (v / 1e4), "c-amount"),
-        dept_rate=screen.series_chart(
-            chart_days, rate_series,
-            lambda v: "%.1f%%" % v, "c-rate"),
+        notice=(LIMITED % "・".join(sorted(scope)) + notice) if scope is not None else notice,
+        company_block=company_block,
+        trend_block=trend_block,
         movement=screen.movement(book["departments"]),
-        health=screen.health(month, whole["pph"], whole_target, whole["vs_target"],
-                             build_ranking(results)),
+        health_block=health_block,
+        howto_block=howto_block,
         alerts=screen.alerts(book["departments"],
                              {n: r["trend"] for n, r in results.items()}, trends, attached,
                              metric["alert_drop_ratio"] * 100),

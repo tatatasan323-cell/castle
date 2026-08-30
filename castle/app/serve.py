@@ -151,7 +151,7 @@ def render_guide_page(cfg, identity):
         company=html.escape(cfg.company), nav=nav)
 
 
-def render_knowledge_page(conn, cfg, identity, params=None, message=""):
+def render_knowledge_page(conn, cfg, identity, params=None, message="", scope=None):
     """知識の泉。引く側（検索・絞り込み）と、書く側（本質・なぜ・どう使うか）を1枚に置く。"""
     params = params or {}
     query = (params.get("q") or "").strip()
@@ -169,6 +169,10 @@ def render_knowledge_page(conn, cfg, identity, params=None, message=""):
     departments = [knowledge.COMPANY_WIDE] + [d["name"] for d in cfg.measured()]
 
     rows = knowledge.search(conn, query, cfg.search_readings) if query else knowledge.active(conn)
+    if scope is not None:
+        # 全社の知識は誰でも読める。部門の知識は、その部門の人だけ。
+        allowed = set(scope) | {knowledge.COMPANY_WIDE}
+        rows = [r for r in rows if r["subject"] in allowed]
     if subject:
         rows = [r for r in rows if r["subject"] == subject]
     if type_of:
@@ -251,7 +255,8 @@ def render_login_page(cfg, message=""):
         company=html.escape(cfg.company), message=message)
 
 
-def render_note_page(instance, conn, cfg, message="", author="", default_day="", identity=None):
+def render_note_page(instance, conn, cfg, message="", author="", default_day="",
+                     identity=None, scope=None):
     def options(items, selected=""):
         return "".join(
             '<option value="%s"%s>%s</option>'
@@ -259,6 +264,8 @@ def render_note_page(instance, conn, cfg, message="", author="", default_day="",
             for i in items)
 
     rows = recent_notes(conn)
+    if scope is not None:
+        rows = [r for r in rows if r["subject"] in set(scope)]
     if rows:
         recent = "".join(
             '<div class="note"><div class="meta">%s ／ %s ／ %s ／ %s</div>%s</div>'
@@ -356,6 +363,11 @@ def make_server(instance, port=8765, host="127.0.0.1"):
             morsel = jar.get(COOKIE)
             return users.resolve(instance, morsel.value) if morsel else None
 
+        def _scope(self):
+            """この鍵で見てよい部門。None は全社。"""
+            name = self._identity()
+            return users.scope_of(instance, name) if name else None
+
         def _needs_login(self):
             return users.enabled(instance) and self._identity() is None
 
@@ -376,14 +388,16 @@ def make_server(instance, port=8765, host="127.0.0.1"):
                     if too_many("build", self.client_address[0]):
                         return self._send(TOO_MANY_PAGE, 429)
                     # 毎回その場で作り直す。画面は常にいまのDBを映す。
-                    build_dashboard.build(instance, nav=True)
+                    build_dashboard.build(instance, nav=True, scope=self._scope())
                     self._send((instance / "out" / "dashboard.html").read_text(encoding="utf-8"))
                 elif path == "/note":
-                    self._send(render_note_page(instance, conn, cfg, identity=self._identity()))
+                    self._send(render_note_page(instance, conn, cfg, identity=self._identity(),
+                                                scope=self._scope()))
                 elif path == "/knowledge":
                     params = {k: v[0] for k, v in
                               urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).items()}
-                    self._send(render_knowledge_page(conn, cfg, self._identity(), params))
+                    self._send(render_knowledge_page(conn, cfg, self._identity(), params,
+                                                    scope=self._scope()))
                 else:
                     self._send("<h1>404</h1><p><a href='/'>ダッシュボードへ</a></p>", 404)
             finally:
@@ -427,6 +441,21 @@ def make_server(instance, port=8765, host="127.0.0.1"):
                 identity = self._identity()
                 if identity:
                     payload["author"] = identity
+
+                # 読めない部門には書けない。読みだけ絞って書き込みを開けておくと、
+                # 範囲外の部門に他人名義の記録が積める。
+                scope = self._scope()
+                if scope is not None:
+                    target = (payload.get("subject") or "").strip()
+                    dept = cfg.resolve(name=target)
+                    allowed = set(scope) | {knowledge.COMPANY_WIDE}
+                    if dept is None or dept["name"] not in allowed:
+                        if not (path == "/knowledge" and target == knowledge.COMPANY_WIDE):
+                            return self._send(
+                                "<h1>この部門には書けません</h1>"
+                                "<p>この鍵で書けるのは %s だけです。</p>"
+                                "<p><a href='/'>ダッシュボードへ</a></p>"
+                                % html.escape("・".join(sorted(scope))), 403)
 
                 if path == "/knowledge":
                     if payload.get("action") == "review":

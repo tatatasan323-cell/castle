@@ -20,11 +20,13 @@ data.db 本体に書かれていない行がある。`data.db` を横からコ�
 import argparse
 import datetime
 import pathlib
+import shutil
 import sqlite3
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
+import config as config_mod
 import db
 
 DIRNAME = "backups"
@@ -67,6 +69,41 @@ def create(instance, tag=""):
     return {"path": path, "integrity": integrity, "records": records,
             "expected": expected, "size": path.stat().st_size,
             "ok": integrity == "ok" and records == expected}
+
+
+def mirror_targets(cfg):
+    """複製先。設定に書かれていなければ空 ── 黙って1箇所だけに置かない。"""
+    raw = (getattr(cfg, "backup", None) or {}).get("mirror") or []
+    return [pathlib.Path(x) for x in ([raw] if isinstance(raw, str) else raw)]
+
+
+def mirror(result, targets):
+    """控えを別のディスクへ写し、写した先でも開き直して確かめる。
+
+    同じディスクの上にしか控えが無いなら、それは控えではない ──
+    ディスクが飛べば本体と一緒に飛ぶ。だから写す。
+    そして**写した先で開き直す**。コピーできたことと、読めることは別。
+    """
+    out = []
+    for target in targets:
+        row = {"target": target, "ok": False, "reason": ""}
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+            copy = target / result["path"].name
+            shutil.copy2(result["path"], copy)
+            audit = sqlite3.connect(copy)
+            integrity = audit.execute("PRAGMA integrity_check").fetchone()[0]
+            records = audit.execute("SELECT COUNT(*) FROM records").fetchone()[0]
+            audit.close()
+            row.update(ok=(integrity == "ok" and records == result["expected"]),
+                       path=copy, records=records,
+                       reason="" if integrity == "ok" else integrity)
+            if row["ok"] is False and not row["reason"]:
+                row["reason"] = "件数が合わない（%d ≠ %d）" % (records, result["expected"])
+        except OSError as exc:
+            row["reason"] = "%s: %s" % (type(exc).__name__, exc)
+        out.append(row)
+    return out
 
 
 def restore(instance, path, yes=False):
@@ -117,6 +154,8 @@ def main():
     parser.add_argument("--restore", metavar="ファイル")
     parser.add_argument("--prune", type=int, metavar="残す数")
     parser.add_argument("--yes", action="store_true", help="復旧・削除を実際に実行する")
+    parser.add_argument("--mirror", action="append", metavar="複製先",
+                        help="別ディスクへ写す場所。設定より優先する")
     args = parser.parse_args()
     instance = db.instance_dir(args.instance)
 
@@ -153,6 +192,23 @@ def main():
     if not made["ok"]:
         raise SystemExit("原本は %d件でした。一致していません。この控えは使わないでください。" % made["expected"])
     print("  原本と一致しました。控え %d件目。" % len(listing(instance)))
+
+    # 同じディスクの上にしか控えが無いなら、それは控えではない。
+    targets = [pathlib.Path(x) for x in (args.mirror or [])] or mirror_targets(
+        config_mod.load(instance))
+    if not targets:
+        print("  ※ 複製先が設定されていません。この控えは原本と同じディスクの上にしかありません。")
+        print("     instance/config.json の backup.mirror に別ディスクの場所を書いてください。")
+        return
+    failed = []
+    for row in mirror(made, targets):
+        if row["ok"]:
+            print("  複製しました: %s（%d件・開き直して確認済み）" % (row["path"], row["records"]))
+        else:
+            failed.append("%s ── %s" % (row["target"], row["reason"]))
+            print("  ※ 複製できませんでした: %s ── %s" % (row["target"], row["reason"]))
+    if failed:
+        raise SystemExit("複製に失敗しています。控えは1箇所にしかありません。")
 
 
 if __name__ == "__main__":

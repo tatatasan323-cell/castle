@@ -1,0 +1,34 @@
+<section>
+  <h2>推移</h2>
+  <div class="voyage tabs">
+    <input type="radio" name="chart" id="ch-total" checked>
+    <input type="radio" name="chart" id="ch-amount">
+    <input type="radio" name="chart" id="ch-rate">
+    <div class="tabbar">
+      <label for="ch-total">航海図（今月の累計営業利益）</label>
+      <label for="ch-amount">部門別 粗利の推移</label>
+      <label for="ch-rate">部門別 粗利率の推移</label>
+    </div>
+
+    <div class="panel" id="p-total">
+      $voyage
+      <div class="keys">
+        <span><i style="background:var(--bar)"></i>実績（$actual_days営業日）</span>
+        <span><i class="dash"></i>着地までの見込み（残り$remaining_days営業日）</span>
+        <span><i style="background:var(--prior)"></i>前年同月</span>
+        <span><i style="background:var(--muted)"></i>予算</span>
+      </div>
+    </div>
+
+    <div class="panel" id="p-amount">
+      $dept_amount
+      <div class="legend">日次の粗利を7営業日の移動平均で均したもの。凡例に触れると、その部門だけが残ります。</div>
+    </div>
+
+    <div class="panel" id="p-rate">
+      $dept_rate
+      <div class="legend">粗利率は<b>月が締まった瞬間にしか動きません</b> ── 原価が月次でしか出ないため。
+        だから階段になります。日次で動かすには、原価を日次で持つ必要があります。</div>
+    </div>
+  </div>
+</section>

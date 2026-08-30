@@ -4,6 +4,8 @@
 分析指標（人時生産性）は下に格下げする ── 社長の問いはそこではない。
 """
 
+from html import escape
+
 
 def money(value, sign=False):
     """億と万で出す。経営者が読む単位に合わせる。"""
@@ -141,7 +143,7 @@ def movement(departments):
             '<td class="barcell"><div class="bar"><span class="fill" style="width:%.1f%%"></span>'
             '<i class="target" style="left:%.1f%%"></i></div></td>'
             "<td>%s</td><td>%s</td><td>%.1f%%</td></tr>"
-            % (worst, arrow, name, money(v["forecast_gross"]),
+            % (worst, arrow, escape(name), money(v["forecast_gross"]),
                min(mark * v["forecast_gross"] / v["budget"], 100.0) if v["budget"] else 0.0, mark,
                pct(v["vs_budget"]), pct(v["vs_last_year"]), v["margin"] * 100))
     return ('<table><thead><tr><th class="name">部門</th><th>着地見込み粗利</th>'
@@ -187,7 +189,8 @@ def series_chart(dates, series, unit, chart_id, width=940, height=260, pad=38):
         if last is not None:
             lines.append('<circle class="s s%d" cx="%.1f" cy="%.1f" r="2.6" fill="%s"/>'
                          % (index, x_of(count - 1), y_of(last), color))
-        legend.append('<span class="key k%d"><i style="background:%s"></i>%s</span>' % (index, color, name))
+        legend.append('<span class="key k%d"><i style="background:%s"></i>%s</span>'
+                      % (index, color, escape(name)))
         rules.append("#%s .k%d:hover ~ svg .s{opacity:.12}"
                      "#%s .k%d:hover ~ svg .s%d{opacity:1;stroke-width:3}"
                      % (chart_id, index, chart_id, index, index))
@@ -381,7 +384,7 @@ def alerts(departments, trends, margin_trends, attached, threshold=5.0):
             "（予算 %s に対して %s ／ 前年同月 %s）。粗利率 %.1f%%。<br>"
             "当月ここまでの前年同期比：売上 %s ／ 人時 %s → <b>%s側</b>の動きが大きい。%s</div>"
             '<div class="ask">確認：%s</div>%s</div>'
-            % ("" if is_trend else " mild", name, tag,
+            % ("" if is_trend else " mild", escape(name), tag,
                money(v["forecast_gross"]), money(v["budget"]),
                pct(v["vs_budget"]), pct(v["vs_last_year"]), v["margin"] * 100,
                pct(v["sales_vs_ly"]), pct(v["hours_vs_ly"], good_high=False),

@@ -562,6 +562,26 @@ def _run(instance):
     conn.execute("DELETE FROM records WHERE kind='検査用'")
     conn.commit()
     # 判定者が出した控えは判定者が片付ける（実運用の控えには手を触れない）
+    # 同じディスクの上にしか控えが無いなら、それは控えではない。
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        away = pathlib.Path(tmp) / "mirror"
+        made = backup.create(instance, tag="mirror")
+        rows = backup.mirror(made, [away])
+        check("控えを別の場所へ写せる", rows and rows[0]["ok"],
+              rows[0]["reason"] if rows else "写せなかった")
+        check("写した先で開き直して件数が一致する",
+              rows and rows[0].get("records") == made["expected"],
+              "%s ≠ %s" % (rows[0].get("records") if rows else "—", made["expected"]))
+
+        # 写せなかったときに黙って成功と言わないか（存在しないドライブを指す）
+        bad = backup.mirror(made, [pathlib.Path("Z:/castle-nowhere")])
+        check("写せなかったら失敗と言う", bad and not bad[0]["ok"] and bad[0]["reason"],
+              bad[0]["reason"] if bad else "判定できず")
+
+    check("複製先が未設定なら、そうと言う",
+          "mirror" in (APP / "backup.py").read_text(encoding="utf-8")
+          and "複製先が設定されていません" in (APP / "backup.py").read_text(encoding="utf-8"))
     junk = [f for f in backup.listing(instance) if f not in kept_before]
     for path in junk:
         path.unlink()
@@ -758,6 +778,20 @@ def _run(instance):
     outside_refs = [m for m in ("src=" + chr(34) + "http", "@import") if m in board]
     check("外部から読み込むものが1つも無い", not outside_refs, "、".join(outside_refs))
 
+    # 画面に出す値は、出どころを問わずエスケープする。
+    # 「設定ファイルは本人が書くから安全」は、次に触る人には引き継がれない。
+    import screen
+    POISON = "農産部<script>alert(1)</script>"
+    fake = {POISON: {"vs_budget": -9.0, "vs_last_year": -3.0, "forecast_gross": 1e7,
+                     "budget": 2e7, "margin": 0.12}}
+    leaks = []
+    if "<script>" in screen.movement(fake):
+        leaks.append("部門別の表")
+    if "<script>" in screen.series_chart(["2026-08-01", "2026-08-02"],
+                                         [(POISON, [1.0, 2.0])], lambda v: "%.0f" % v, "c-x"):
+        leaks.append("グラフの凡例")
+    check("部門名をそのままHTMLに出していない", not leaks, "素通り: " + "、".join(leaks))
+
     # 何度でも叩ける入口を残さない
     guard = (APP / "serve.py").read_text(encoding="utf-8")
     check("回数制限の仕組みが入っている", "too_many" in guard,
@@ -820,7 +854,81 @@ def _run(instance):
     broken = [n for n, p in pages.items() if p.count("<h1>") != p.count("</h1>")]
     check("HTMLの見出しが閉じている", not broken, "、".join(broken))
 
+    print("")
+    print("【19】認可 ── 見てよい範囲の外が、見えないか")
+    # 全社の集計を伏せるだけでは足りない。部門別の欄が全部残っていれば、
+    # 引き算で全社が復元できる。**データの側で絞る。**
+    import http.cookiejar
+    import threading, urllib.error, urllib.parse, urllib.request
+
+    keep = (instance / "users.json").read_bytes() if (instance / "users.json").exists() else None
+    try:
+        users.save(instance, [])
+        token = users.issue(instance, "検査用 農産部長", ["農産部"])
+        check("範囲つきの鍵を発行できる", users.scope_of(instance, "検査用 農産部長") == ["農産部"],
+              str(users.scope_of(instance, "検査用 農産部長")))
+        wide = users.issue(instance, "検査用 役員")
+        check("範囲を書かない鍵は全社（既存の鍵を壊さない）",
+              users.scope_of(instance, "検査用 役員") is None)
+
+        serve._seen.clear()
+        srv = serve.make_server(instance, 0)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        base = "http://127.0.0.1:%d" % srv.server_address[1]
+        try:
+            def open_as(key):
+                jar = http.cookiejar.CookieJar()
+                op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+                op.open(urllib.request.Request(
+                    base + "/login", data=urllib.parse.urlencode({"token": key}).encode()),
+                    timeout=10).read()
+                return op
+
+            narrow, broad = open_as(token), open_as(wide)
+            page = narrow.open(base + "/", timeout=10).read().decode("utf-8")
+            body = page[page.index("<body"):]
+            # 語ではなく構造で見る。断り書きが節の名前を挙げるので、語では判定できない。
+            for label, marker in (("着地見込み", 'class="landing"'),
+                                  ("利益の階段", 'table class="ladder"'),
+                                  ("金の巡り", 'class="cashgrid"'),
+                                  ("航海図", 'id="ch-total"')):
+                check("部門の鍵で「%s」の節が出ない" % label, marker not in body)
+            outside = [n for n in ("加工食品部", "畜産部", "水産部", "低温食品部") if n in body]
+            check("部門の鍵で範囲外の部門が出ない", not outside, "出ている: " + "、".join(outside))
+            check("部門の鍵でも自部門は見える", "農産部" in body)
+
+            full = broad.open(base + "/", timeout=10).read().decode("utf-8")
+            check("全社の鍵ではこれまで通り全部見える",
+                  all(w in full for w in ('table class="ladder"', 'class="cashgrid"',
+                                          'id="ch-total"', "加工食品部")))
+
+            # 読めない部門に書けてしまわないか
+            form = urllib.parse.urlencode(
+                {"subject": "水産部", "occurred_at": "2026-08-12", "category": "得意先の事情",
+                 "author": "x", "text": "範囲外への書き込みが通ってはいけない。"}).encode()
+            status = None
+            try:
+                status = narrow.open(urllib.request.Request(base + "/note", data=form), timeout=10).status
+            except urllib.error.HTTPError as err:
+                status = err.code
+            check("範囲外の部門には書けない（403）", status == 403, "HTTP %s" % status)
+
+            note = narrow.open(base + "/note", timeout=10).read().decode("utf-8")
+            check("範囲外の申し送りが一覧に出ない", "盆前で休業の得意先" not in note)
+            know = narrow.open(base + "/knowledge", timeout=10).read().decode("utf-8")
+            check("範囲外の知識が一覧に出ない", "盆前の欠品対策" not in know)
+            check("全社の知識は部門の鍵でも読める", "会計の締めは翌月10日ごろ" in know)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+    finally:
+        (instance / "users.json").unlink(missing_ok=True)
+        if keep is not None:
+            (instance / "users.json").write_bytes(keep)
+        serve._seen.clear()
+
     return report()
+
 
 
 
