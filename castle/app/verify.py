@@ -927,7 +927,88 @@ def _run(instance):
             (instance / "users.json").write_bytes(keep)
         serve._seen.clear()
 
+    print("")
+    print("【20】申し送りから知識へ ── 流れるものを、残るものに上げる")
+    # 何が「繰り返し効くこと」かは人にしか決められない。
+    # 機械にできるのは、**繰り返していることを名指しして、上げる口を用意する**ところまで。
+    import promote
+
+    mark = conn.execute("SELECT MAX(id) FROM records").fetchone()[0]
+    base_note = {"occurred_at": "2026-08-11", "category": "相場・仕入価格",
+                 "author": "検査用", "text": "相場が高いので数量を絞っている。"}
+    for i in range(3):
+        ok, msg = serve.add_note(conn, cfg, dict(base_note, subject="水産部",
+                                                 text="相場が高いので数量を絞っている。%d" % i))
+        check("繰り返しの材料を入れられる（%d件目）" % (i + 1), ok, msg)
+    conn.commit()
+
+    found = promote.repeats(conn, days=90, threshold=3)
+    hit = [r for r in found if r["subject"] == "水産部" and r["category"] == "相場・仕入価格"]
+    check("同じ部門・同じ区分が続いていると名指しする", len(hit) == 1 and hit[0]["count"] >= 3,
+          "%d件" % (hit[0]["count"] if hit else 0))
+    check("閾値に届かないものは名指ししない",
+          not [r for r in found if r["subject"] == "低温食品部"],
+          "低温食品部は1件しかないのに挙がっている")
+
+    seed = promote.draft(conn, hit[0]["ids"][0])
+    check("申し送りの本文を持ったまま知識の入力へ渡せる",
+          seed and seed["subject"] == "水産部" and "相場が高い" in seed["essence"],
+          str(seed))
+
+    made = knowledge.add(conn, cfg, dict(seed, type="判断",
+                                         why="相場高で数量を追うと粗利率が先に落ちるため",
+                                         how="相場が前年比+15%を超えたら赤字取引を切る",
+                                         author="検査用"))
+    check("その場で知識にできる", made["ok"], made["message"])
+    conn.commit()
+    promote.mark_promoted(conn, hit[0]["ids"], made["id"])
+    conn.commit()
+
+    body = json.loads(conn.execute("SELECT body FROM records WHERE id=?",
+                                   (hit[0]["ids"][0],)).fetchone()[0])
+    check("上げた申し送りに印が残る", body.get("promoted_to") == made["id"],
+          str(body.get("promoted_to")))
+    again = promote.repeats(conn, days=90, threshold=3)
+    check("上げ終えたものは、もう名指ししない",
+          not [r for r in again if r["subject"] == "水産部" and r["category"] == "相場・仕入価格"])
+
+    html5 = None
+    code, out = run(APP / "build_dashboard.py")
+    check("昇格を入れてもダッシュボードが生成できる", code == 0,
+          "" if code == 0 else out.strip().splitlines()[-1][:160])
+    page = serve.render_knowledge_page(conn, cfg, None)
+    check("繰り返している申し送りが、知識の泉の画面に出る", "繰り返し出ている申し送り" in page)
+
+    # 画面から上げたときに、塊ぜんぶへ印が付くか（1件だけだと残りが催促され続ける）
+    for i in range(3):
+        serve.add_note(conn, cfg, dict(base_note, subject="畜産部",
+                                       text="出荷が前倒しになっている。%d" % i))
+    conn.commit()
+    pack = [g for g in promote.repeats(conn, threshold=3) if g["subject"] == "畜産部"][0]
+    lift = serve.render_knowledge_page(conn, cfg, None, {"from": str(pack["ids"][0])})
+    check("上げる画面が、その申し送りを持って開く", "出荷が前倒しになっている" in lift)
+    check("どの申し送りから来たかを画面が持っている",
+          ('name="from_note" value="%d"' % pack["ids"][0]) in lift)
+
+    payload = {"subject": "畜産部", "type": "コツ", "author": "検査用",
+               "essence": "出荷の前倒しが続く時期は、翌週の人時を先に厚くする",
+               "why": "前倒しが続くと荷受けが集中し、残業でしか吸収できなくなるため",
+               "how": "2週続けて前倒しが出たら、翌週のシフトを1人ぶん増やす",
+               "from_note": str(pack["ids"][0])}
+    got = knowledge.add(conn, cfg, payload)
+    promote.mark_promoted(conn, promote.group_of(conn, pack["ids"][0]), got["id"])
+    conn.commit()
+    left = [g for g in promote.repeats(conn, threshold=3) if g["subject"] == "畜産部"]
+    check("塊ぜんぶが上げ済みになる（1件だけ残らない）", not left,
+          "まだ %d件 残っている" % (left[0]["count"] if left else 0))
+
+    conn.execute("DELETE FROM records WHERE id > ?", (mark,))
+    conn.commit()
+    check("検査で入れた昇格の材料を片付けた",
+          conn.execute("SELECT COUNT(*) FROM records WHERE id > ?", (mark,)).fetchone()[0] == 0)
+
     return report()
+
 
 
 

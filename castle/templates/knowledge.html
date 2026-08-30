@@ -39,6 +39,16 @@ details.write[open] summary::before{content:"▾ "}
 .who{padding:9px 11px;border:1px solid var(--line-2);border-radius:6px;background:var(--bg)}
 .who span{color:var(--muted);font-size:11.5px}
 a{color:var(--bar)}
+
+/* 繰り返し出ている申し送り。上げるかどうかは人が決める ── だからボタンではなくリンク */
+.repeats{margin-top:6px}
+.repeat{background:var(--card);border:1px solid var(--line);border-radius:12px;
+        padding:13px 17px;margin-bottom:9px;backdrop-filter:blur(7px)}
+.repeat .meta{color:var(--muted);font-size:11.5px}
+.repeat .sample{font-size:13px;margin:5px 0 8px}
+.repeat .lift{font-size:12px;color:var(--accent);text-decoration:none;
+              border:1px solid var(--accent-dim);border-radius:20px;padding:4px 13px}
+.repeat .lift:hover{text-shadow:var(--glow);box-shadow:var(--glow-soft)}
 </style>
 </head>
 <body>
@@ -76,6 +86,8 @@ $message
   </div>
 </form>
 
+$repeats
+
 $stale
 
 <h2>$heading</h2>
@@ -106,7 +118,8 @@ $entries
   </div>
 
   <label for="essence">本質（一行・120字まで）</label>
-  <input type="text" id="essence" name="essence" maxlength="120" required
+  <input type="hidden" name="from_note" value="$seed_note">
+  <input type="text" id="essence" name="essence" maxlength="120" required value="$seed_essence"
          placeholder="例：相場高のときは数量を追わず、赤字取引を止めて粗利を守る">
 
   <label for="why">なぜそうなのか（200字まで）</label>

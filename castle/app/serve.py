@@ -36,6 +36,7 @@ import build_dashboard
 import config as config_mod
 import db
 import knowledge
+import promote
 import users
 from normalize import parse_date
 
@@ -158,6 +159,9 @@ def render_knowledge_page(conn, cfg, identity, params=None, message="", scope=No
     subject = (params.get("subject") or "").strip()
     type_of = (params.get("type") or "").strip()
     supersedes = (params.get("supersedes") or "").strip()
+    seed = promote.draft(conn, int(params["from"])) if str(params.get("from") or "").isdigit() else None
+    if seed and scope is not None and seed["subject"] not in set(scope):
+        seed = None
 
     def options(items, selected, blank=""):
         out = ['<option value="">%s</option>' % html.escape(blank)] if blank else []
@@ -167,6 +171,27 @@ def render_knowledge_page(conn, cfg, identity, params=None, message="", scope=No
         return "".join(out)
 
     departments = [knowledge.COMPANY_WIDE] + [d["name"] for d in cfg.measured()]
+
+    # 繰り返し出ていることを名指しする。**何が本質かは決めない** ── 決めるのは書く人。
+    groups = promote.repeats(conn)
+    if scope is not None:
+        groups = [g for g in groups if g["subject"] in set(scope)]
+    if groups:
+        cards = "".join(
+            '<div class="repeat"><div class="meta">%s ／ <b>%s</b> ／ 直近90日で %d件</div>'
+            '<div class="sample">%s</div>'
+            '<a class="lift" href="/knowledge?from=%d">これを知識にする</a></div>'
+            % (html.escape(g["subject"]), html.escape(g["category"]), g["count"],
+               html.escape(g["texts"][0][:70]), g["ids"][0])
+            for g in groups[:5])
+        repeats_block = (
+            '<section class="repeats"><h2>繰り返し出ている申し送り</h2>'
+            '<div class="lead">同じ部門で同じ区分が続いています。'
+            '<b>今回の事情ではなく、この会社で繰り返し効くことなら、知識に上げてください。</b>'
+            '上げると、その部門の数字が落ちた瞬間にダッシュボードへ出るようになります。</div>'
+            "%s</section>" % cards)
+    else:
+        repeats_block = ""
 
     rows = knowledge.search(conn, query, cfg.search_readings) if query else knowledge.active(conn)
     if scope is not None:
@@ -241,12 +266,15 @@ def render_knowledge_page(conn, cfg, identity, params=None, message="", scope=No
         query=html.escape(query),
         subject_options=options(departments, subject, blank="すべての部門"),
         type_options=options(list(knowledge.TYPES), type_of, blank="すべての種類"),
-        form_subjects=options(departments, subject or ""),
+        form_subjects=options(departments, (seed or {}).get("subject") or subject or ""),
+        repeats=repeats_block,
         form_types=options(list(knowledge.TYPES), ""),
         heading="現役の知識 %d件" % len(rows),
         entries=entries, stale=stale_block,
         supersede_field=supersede_field, author_field=author_field,
-        write_open="open" if supersede_field else "")
+        seed_essence=html.escape((seed or {}).get("essence", "")),
+        seed_note=(seed or {}).get("from_note", ""),
+        write_open="open" if (supersede_field or seed) else "")
 
 
 def render_login_page(cfg, message=""):
@@ -465,6 +493,11 @@ def make_server(instance, port=8765, host="127.0.0.1"):
                                   else '<div class="msg">その知識は見つかりませんでした。</div>')
                         return self._send(render_knowledge_page(conn, cfg, identity, message=banner))
                     result = knowledge.add(conn, cfg, payload)
+                    if result["ok"] and str(payload.get("from_note") or "").isdigit():
+                        # 上げたのは1件ではなく塊のほう。残りに印が付かないと催促され続ける。
+                        lifted = promote.mark_promoted(
+                            conn, promote.group_of(conn, int(payload["from_note"])), result["id"])
+                        result["message"] += "（申し送り %d件を、上げ済みにしました）" % lifted
                     conn.commit()
                     banner = '<div class="msg %s">%s</div>' % ("ok" if result["ok"] else "",
                                                                html.escape(result["message"]))
