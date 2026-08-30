@@ -688,7 +688,93 @@ def _run(instance):
     check("仕入の推移が年をまたいでいない", len(rng) == 2 and rng[0][:4] == rng[1][:4],
           "→".join(rng))
 
+    print("")
+    print("【17】道具としての安全 ── 時報002の点検項目を、機械に見させる")
+    # 「外部依存ゼロ」は方針ではなく、検査されて初めて事実になる。
+    # 書いた本人が守るつもりでも、次に触る人（AIを含む）は知らない。
+    import ast as _ast
+    stdlib = set(sys.stdlib_module_names)
+    local = {f.stem for f in APP.glob("*.py")}
+    used, where = set(), {}
+    for path in sorted(APP.glob("*.py")):
+        tree = _ast.parse(path.read_text(encoding="utf-8"))
+        for node in _ast.walk(tree):
+            if isinstance(node, _ast.Import):
+                names = [a.name for a in node.names]
+            elif isinstance(node, _ast.ImportFrom):
+                names = [node.module] if (node.level == 0 and node.module) else []
+            else:
+                continue
+            for name in names:
+                head = name.split(".")[0]
+                used.add(head)
+                where.setdefault(head, path.name)
+    outside = sorted(used - stdlib - local)
+    check("外部ライブラリを1つも使っていない", not outside,
+          "、".join("%s（%s）" % (m, where[m]) for m in outside))
+
+    # 幅ゼロ・双方向制御・不可視の空白。目視は効かないので数えさせる。
+    INVISIBLE = {0x00AD: "ソフトハイフン", 0x200B: "幅ゼロ空白", 0x200C: "幅ゼロ非結合",
+                 0x200D: "幅ゼロ結合", 0x200E: "左横書き制御", 0x200F: "右横書き制御",
+                 0x2060: "単語結合子", 0x2028: "行区切り", 0x2029: "段落区切り",
+                 0x202A: "双方向制御", 0x202B: "双方向制御", 0x202C: "双方向制御",
+                 0x202D: "双方向制御", 0x202E: "双方向上書き", 0xFEFF: "BOM"}
+    found = []
+    targets = list(APP.glob("*.py")) + list((APP.parent / "templates").glob("*"))
+    targets.append(APP.parent / "schema.sql")
+    for path in sorted(t for t in targets if t.is_file()):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for line_no, line in enumerate(text.split(chr(10)), 1):
+            for ch in line:
+                code = ord(ch)
+                if code in INVISIBLE or (code < 32 and ch not in (chr(9), chr(13))):
+                    found.append("%s:%d %s" % (path.name, line_no,
+                                               INVISIBLE.get(code, "制御文字 U+%04X" % code)))
+    check("見えない文字が1つも無い", not found, "、".join(found[:5]))
+
+    # CDNは「入れていない」ではなく「入れられない」状態にしておく
+    board = (instance / "out" / "dashboard.html").read_text(encoding="utf-8")
+    outside_refs = [m for m in ("src=" + chr(34) + "http", "@import") if m in board]
+    check("外部から読み込むものが1つも無い", not outside_refs, "、".join(outside_refs))
+
+    # 何度でも叩ける入口を残さない
+    guard = (APP / "serve.py").read_text(encoding="utf-8")
+    check("回数制限の仕組みが入っている", "too_many" in guard,
+          "ログインの総当たりと投稿の連打を止める側が要る")
+    check("制限を超えたら 429 を返す", "429" in guard)
+
+    # ここまでは「そう書いてある」だけ。実際に叩いて止まるかを確かめる。
+    import threading, urllib.error, urllib.parse, urllib.request
+    # 判定者が対象の状態を握る。前の節のログイン試行が残っていると、
+    # 何回目で止まるかが変わってしまう（users.json を退避するのと同じ理由）。
+    serve._seen.clear()
+    serve.LIMITS["login"] = (3, 600)      # 試験のあいだだけ狭める
+    srv2 = serve.make_server(instance, 0)
+    threading.Thread(target=srv2.serve_forever, daemon=True).start()
+    base2 = "http://127.0.0.1:%d" % srv2.server_address[1]
+    codes = []
+    try:
+        body = urllib.parse.urlencode({"token": "まちがった鍵"}).encode()
+        for _ in range(5):
+            try:
+                with urllib.request.urlopen(
+                        urllib.request.Request(base2 + "/login", data=body, method="POST"),
+                        timeout=10) as res:
+                    codes.append(res.status)
+            except urllib.error.HTTPError as err:
+                codes.append(err.code)
+    finally:
+        srv2.shutdown()
+        srv2.server_close()
+        serve.LIMITS["login"] = (10, 600)
+        serve._seen.clear()
+
+    check("3回を超えた鍵の試行が実際に止まる（429が返る）",
+          codes[:3] and all(c != 429 for c in codes[:3]) and 429 in codes[3:],
+          "返ってきたHTTP: %s" % codes)
+
     return report()
+
 
 
 

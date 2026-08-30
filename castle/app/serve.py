@@ -27,6 +27,7 @@ import json
 import pathlib
 import string
 import sys
+import time
 import urllib.parse
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -288,6 +289,41 @@ def render_note_page(instance, conn, cfg, message="", author="", default_day="",
     )
 
 
+# ── 回数制限 ──────────────────────────────────────────────
+# 鍵の総当たりも、投稿の連打も、画面の作り直しの叩きも、
+# 「短い時間に何度も」という同じ形をしている。だから窓で数えて止める。
+#
+# 記録はメモリだけに置く。プロセスを止めれば消えるが、それでよい ──
+# 総当たりは連続した行為なので、途切れた時点で成立しなくなる。
+# ここでファイルやDBに書き始めると、止めるための仕組みが新しい重さになる。
+LIMITS = {
+    "login": (10, 600),    # 鍵の試行：10分に10回
+    "write": (30, 60),     # 申し送り・知識の投稿：1分に30回
+    "build": (60, 60),     # 画面の作り直し：1分に60回（GETのたびに全部組み直すため）
+}
+_seen = {}
+
+
+def too_many(bucket, who):
+    limit, window = LIMITS[bucket]
+    now = time.monotonic()
+    key = (bucket, who)
+    recent = [t for t in _seen.get(key, []) if now - t < window]
+    recent.append(now)
+    _seen[key] = recent
+    if len(_seen) > 2000:                       # 溜まりっぱなしにしない
+        for dead in [k for k, v in _seen.items() if not v or now - v[-1] > 3600]:
+            _seen.pop(dead, None)
+    return len(recent) > limit
+
+
+TOO_MANY_PAGE = (
+    "<h1>しばらくお待ちください</h1>"
+    "<p>短い時間に何度も送られています。少し待ってからやり直してください。</p>"
+    "<p><a href='/'>ダッシュボードへ</a></p>"
+)
+
+
 def make_server(instance, port=8765, host="127.0.0.1"):
     instance = pathlib.Path(instance)
 
@@ -337,6 +373,8 @@ def make_server(instance, port=8765, host="127.0.0.1"):
                 if path == "/login" or self._needs_login():
                     return self._send(render_login_page(cfg))
                 if path == "/":
+                    if too_many("build", self.client_address[0]):
+                        return self._send(TOO_MANY_PAGE, 429)
                     # 毎回その場で作り直す。画面は常にいまのDBを映す。
                     build_dashboard.build(instance, nav=True)
                     self._send((instance / "out" / "dashboard.html").read_text(encoding="utf-8"))
@@ -364,6 +402,11 @@ def make_server(instance, port=8765, host="127.0.0.1"):
                 cfg = config_mod.load(instance)
 
                 if path == "/login":
+                    # 鍵は総当たりできる形をしている。試行そのものに上限を置く。
+                    if too_many("login", self.client_address[0]):
+                        return self._send(render_login_page(
+                            cfg, '<div class="msg">試行が多すぎます。しばらく待ってからやり直してください。</div>'),
+                            429)
                     name = users.resolve(instance, payload.get("token", ""))
                     if name is None:
                         return self._send(render_login_page(
@@ -376,6 +419,9 @@ def make_server(instance, port=8765, host="127.0.0.1"):
 
                 if self._needs_login():
                     return self._send(render_login_page(cfg), 401)
+
+                if too_many("write", self.client_address[0]):
+                    return self._send(TOO_MANY_PAGE, 429)
 
                 # 鍵で本人が分かっているなら、送られてきた名乗りは捨てる。ここが認証を入れる意味。
                 identity = self._identity()
