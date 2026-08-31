@@ -34,8 +34,6 @@ THEME = db.ROOT / "castle" / "templates" / "theme.css"
 # 条件分岐をmarkupに書かず、見せるものが違うなら別のテンプレートにする。
 PART = db.ROOT / "castle" / "templates"
 # 凡例の日数と、実際の窓を1か所から出す。別々に書くと必ず食い違う。
-SMOOTH_WINDOW = 6
-SMOOTH_LABEL = "週ぶん（%d営業日）の移動平均" % SMOOTH_WINDOW
 
 # サーバ配信のときだけ出す。単体ファイルとして配ったときにリンク切れを作らないため。
 NAV = ('<nav><b>経営ステータス</b>'
@@ -47,43 +45,19 @@ NAV = ('<nav><b>経営ステータス</b>'
 
 # ---------------------------------------------------------------- 集計
 
-def load_margins(conn):
-    """部門×月の粗利率。会計の売上高で会計の原価を割る（サイロ内で閉じた比にする）。"""
-    rows = conn.execute(
-        """SELECT subject AS s, occurred_at AS d,
-                  json_extract(body,'$.cost')  AS cost,
-                  json_extract(body,'$.sales') AS sales
-             FROM records WHERE kind='部門損益'"""
-    ).fetchall()
-    margins = {}
-    for row in rows:
-        if row["sales"]:
-            margins.setdefault(row["s"], {})[row["d"][:7]] = 1 - row["cost"] / row["sales"]
-    return margins
+def margin_trend(rows):
+    """確定した直近2回の棚卸から、粗利率の動き。
 
-
-def margin_trend(by_month):
-    """確定した直近2ヶ月の粗利率。当月内では粗利率が動かないので、動きはここでしか見えない。"""
-    months = sorted(by_month)
-    if len(months) < 2:
-        return None
-    return months[-2], by_month[months[-2]], months[-1], by_month[months[-1]]
-
-
-def margin_for(by_month, day):
-    """その月が締まっていれば実績、まだなら直近の確定月の率（＝推定）。
-
-    どの月の率を使ったかも返す。ここが同じ月なら粗利率は動きようがないので、
-    「粗利率 ±0」を変化として表示してはいけない。
+    月次の会計から取っていた頃は、当月内で粗利率が1ミリも動かなかった。
+    棚卸が週次で来るので、**週ごとに動く** ── 「粗利率が続けて下がっている」が言える。
     """
-    month = day[:7]
-    if month in by_month:
-        return by_month[month], False, month
-    settled = [m for m in by_month if m < month]
-    return (by_month[max(settled)], True, max(settled)) if settled else (None, True, None)
+    if not rows or len(rows) < 2:
+        return None
+    (before, cost_before), (now, cost_now) = rows[-2], rows[-1]
+    return before, 1 - cost_before, now, 1 - cost_now
 
 
-def load_daily(conn, targets, margins):
+def load_daily(conn, targets, weekly, monthly):
     """日付×部門で売上・労働時間・粗利を揃える。骨が同じなので結合はこれだけで済む。"""
     rows = conn.execute(
         """SELECT occurred_at AS d, subject AS s,
@@ -99,9 +73,11 @@ def load_daily(conn, targets, margins):
             if row["s"] in targets:
                 half += 1
             continue
-        rate, is_estimate, source = margin_for(margins.get(row["s"], {}), row["d"])
-        if rate is None:
+        # 原価率は棚卸から（pnl に1本化）。同じ元から取らないと、画面と階段がずれる。
+        cost_rate, is_estimate, source = pnl.rate_at(weekly, monthly, row["s"], row["d"])
+        if cost_rate is None:
             continue
+        rate = 1 - cost_rate
         if is_estimate:
             estimated.add(row["d"])
         rate_months[(row["s"], row["d"])] = source
@@ -420,11 +396,13 @@ def build(instance, verbose=False, nav=False, scope=None):
     cfg = config_mod.load(instance)
     metric = cfg.metric
 
-    margins = load_margins(conn)
-    if not margins:
-        raise SystemExit("会計（部門損益）が入っていません。着地見込みは出せません。")
+    weekly = pnl.weekly_cost_rates(conn)
+    monthly = pnl.load_monthly(conn)
+    if not weekly and not monthly:
+        raise SystemExit("棚卸も会計も入っていません。原価率が出せません。")
 
-    data, half, estimated, rate_months = load_daily(conn, {d["name"] for d in cfg.measured()}, margins)
+    data, half, estimated, rate_months = load_daily(
+        conn, {d["name"] for d in cfg.measured()}, weekly, monthly)
     measured = [d for d in cfg.measured() if d["name"] in data]
     if not measured:
         raise SystemExit("売上・労働時間・原価の3つが揃っている部門がありません。")
@@ -459,10 +437,11 @@ def build(instance, verbose=False, nav=False, scope=None):
 
     trends_html, trend_cards = build_trends(trend_entries, series_by_name, metric)
     est_in_window = sorted(d for d in dates[-window:] if d in estimated)
-    trends = {name: margin_trend(margins.get(name, {})) for name in results}
+    trends = {name: margin_trend(weekly.get(name)) for name in results}
 
     # ── 経営者の問いに答える計算。ここがこの画面の主役になる ──
     book = pnl.build(conn, cfg, metric["yoy_offset_days"])
+    year = pnl.build_year(conn, cfg, metric["yoy_offset_days"])
     if scope is not None:
         # 計算は全社ぶん回るが、**画面に渡すのは見てよい部門だけ**にする。
         # ここを絞り忘れると、全社の集計を伏せても部門別の欄から復元できてしまう。
@@ -533,26 +512,42 @@ def build(instance, verbose=False, nav=False, scope=None):
              % (yen(records), batches, len(measured), len(excluded), len(current), current[0], current[-1],
                 len(dates) - len(current)))
 
-    # 部門別の推移は**日次のまま**並べる。月次に丸めるのは会計の都合であって、経営の都合ではない。
-    chart_days = [d for d in dates if d >= shift(dates[-1], 120)]
+    # 部門別の推移は**月次**で並べる。日次を2ヶ月半だらだら並べても、経営の視点にはならない
+    # ── 会社の損益は月ごとに確定するので、部門の良し悪しも月の単位で判断する。
+    # 12ヶ月あれば季節が見える。3ヶ月の日次では、季節と曜日の区別すらつかない。
+    monthly = pnl.load_monthly(conn)
+    chart_months = sorted({m for rows in monthly.values() for m in rows})[-13:]
     buy_by_day = dict(book["cash"]["purchase"]["series"]) if book["cash"] else {}
     stock_by_day = book.get("stock") or {}
     amount_series, rate_series = [], []
     for dept in sorted(measured, key=lambda d: -results[d["name"]]["gross"]):
         name = dept["name"]
-        daily = data[name]
-        gross = [daily.get(d, (0.0, 0.0, None))[2] for d in chart_days]
-        rate = [None if daily.get(d) is None or not daily[d][0]
-                else daily[d][2] / daily[d][0] * 100 for d in chart_days]
-        amount_series.append((name, screen.moving_average(gross)))
+        rows = monthly.get(name, {})
+        gross, rate = [], []
+        for key in chart_months:
+            v = rows.get(key)
+            gross.append(None if v is None else v["sales"] - v["cost"])
+            rate.append(None if not v or not v["sales"]
+                        else (v["sales"] - v["cost"]) / v["sales"] * 100)
+        amount_series.append((name, gross))
         rate_series.append((name, rate))
 
     dept_charts = {
-        "dept_amount": screen.series_chart(chart_days, amount_series,
-                                           lambda v: "%.0f万" % (v / 1e4), "c-amount"),
-        "dept_rate": screen.series_chart(chart_days, rate_series,
+        "dept_amount": screen.series_chart(chart_months, amount_series,
+                                           lambda v: "%.1f億" % (v / 1e8), "c-amount"),
+        "dept_rate": screen.series_chart(chart_months, rate_series,
                                          lambda v: "%.1f%%" % v, "c-rate"),
+        "chart_months": len(chart_months),
     }
+    # 在庫だけは日次で見る意味がある ── 発注の判断は日の単位で起きるから。
+    # ただし**前月頭から**に限る（約6週）。棚卸は週に一度なので、当月だけでは
+    # 週の呼吸が1周期も出ない。かといって延々と伸ばせば、月ごとに確定するという
+    # 損益の構造から外れる。月の境目が1本入る長さが、いちばん短くて読める長さ。
+    this_month = book["month"]["month"] if book["month"] else None
+    since = ("%04d-%02d" % (int(this_month[:4]) - (this_month[5:7] == "01"),
+                            int(this_month[5:7]) - 1 or 12)) if this_month else None
+    stock_days = [d for d in sorted(stock_by_day) if since and d[:7] >= since]
+
     if scope is None:
         company_block = string.Template(
             (PART / "_company.html").read_text(encoding="utf-8")).substitute(
@@ -564,17 +559,18 @@ def build(instance, verbose=False, nav=False, scope=None):
             # 仕入の線は外した。金額は上のカードに出ているうえ、
             # 在庫を積み上げで置くようにしたので、仕入の線は在庫の線の微分になる。
             stockchart=screen.series_chart(
-                chart_days,
+                stock_days,
                 [("在庫（週次の実データ）",
-                  [stock_by_day.get(d, {}).get("amount")
-                   if stock_by_day.get(d, {}).get("settled") else None for d in chart_days]),
-                 ("在庫（在庫日数を当てた想定）",
-                  [stock_by_day.get(d, {}).get("amount") for d in chart_days])],
-                lambda v: "%.2f億" % (v / 1e8), "c-stock") if stock_by_day else "")
+                  [stock_by_day[d]["amount"] if stock_by_day[d]["settled"] else None
+                   for d in stock_days]),
+                 ("在庫（買った分・売った分から積み上げた想定）",
+                  [stock_by_day[d]["amount"] for d in stock_days])],
+                lambda v: "%.2f億" % (v / 1e8), "c-stock") if stock_days else "")
         trend_block = string.Template(
             (PART / "_trend.html").read_text(encoding="utf-8")).substitute(
             voyage=screen.voyage(month),
             actual_days=month["actual_days"], remaining_days=month["remaining_days"],
+            year_view=screen.year_view(year), year_verdict=screen.year_verdict(year),
             **dept_charts)
         howto_block = (PART / "_howto.html").read_text(encoding="utf-8")
         health_block = ('<section><h2>正常に回っているか</h2>%s</section>'
@@ -627,7 +623,12 @@ def build(instance, verbose=False, nav=False, scope=None):
                    "vs_yoy": r["vs_yoy"], "trend": r["trend"]}
             for name, r in results.items()},
         "trend_cards": trend_cards,
-        "stock_chart_range": [chart_days[0], chart_days[-1]] if chart_days else None,
+        "stock_chart_range": [stock_days[0], stock_days[-1]] if stock_days else None,
+        # 年間の着地。記事の照合も、ここから数字を取る（記事に期待値を書き写さない）。
+        "year": ({"label": year["this_year"]["label"], "budget": year["budget"],
+                  "sales": year["this_year"]["sales"], "op": year["this_year"]["op"],
+                  "last_sales": year["last_year"]["sales"], "last_op": year["last_year"]["op"],
+                  "months": year["this_year"]["months"]} if year else None),
         "stock_view": _stock_view(book),
         "ladder": book["ladder"]["steps"],
         "depreciation": book["ladder"]["depreciation"],

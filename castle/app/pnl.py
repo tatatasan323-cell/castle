@@ -8,7 +8,7 @@
 日次の営業利益を、既存3サイロの掛け算で組み立てる。新しいサイロは要らない。
 
     売上      販売管理（日次）           そのまま
-    売上原価  会計（月次の原価率）       日次売上 × 原価率
+    売上原価  棚卸（週次の原価率）       日次売上 × 原価率
     人件費    勤怠（日次人時）× 会計（月次の人時単価）
     その他販管費  会計（月次）           固定費なので営業日数で日割り
 
@@ -152,6 +152,71 @@ def daily_stock(conn, cfg, days=None, window=None):
     return out
 
 
+def weekly_cost_rates(conn, cfg=None):
+    """棚卸から、部門ごと・週ごとの原価率を出す。**在庫を数える理由がこれ。**
+
+        売上原価 ＝ 期首在庫 ＋ 仕入 − 期末在庫
+        原価率   ＝ 売上原価 ÷ その週の売上
+
+    会計の月次締めを待たずに原価率が出る。だから当月の粗利が
+    「先月の率を当てた推定」ではなく、**その週に実際に起きたもの**になる。
+
+    在庫を週次で数えているのに原価率を月次の会計から取っていたら、
+    在庫は粗利に1円も効かない ── 数える意味が無くなる。
+
+    戻り値: {部門: [(棚卸日, 原価率), ...]}（棚卸日の昇順）
+    """
+    stock, buy, sale = {}, {}, {}
+    for row in conn.execute(
+            "SELECT kind, occurred_at d, subject s, amount a FROM records "
+            "WHERE kind IN ('在庫','仕入','売上') AND amount IS NOT NULL"):
+        {"在庫": stock, "仕入": buy, "売上": sale}[row["kind"]].setdefault(
+            row["s"], {})[row["d"]] = float(row["a"])
+
+    out = {}
+    for dept, counts in stock.items():
+        stamps = sorted(counts)
+        rows = []
+        for start, end in zip(stamps, stamps[1:]):
+            # 棚卸と棚卸のあいだが空きすぎている＝前年データと当年データの継ぎ目。
+            # そこを1週間として計算すると、9か月ぶんの仕入を1週間の売上で割ることになる。
+            if (datetime.date.fromisoformat(end)
+                    - datetime.date.fromisoformat(start)).days > 14:
+                continue
+            span = [d for d in sale.get(dept, {}) if start < d <= end]
+            revenue = sum(sale[dept][d] for d in span)
+            if not revenue:
+                continue
+            cogs = (counts[start]
+                    + sum(buy.get(dept, {}).get(d, 0.0) for d in span)
+                    - counts[end])
+            rows.append((end, cogs / revenue))
+        if rows:
+            out[dept] = rows
+    return out
+
+
+def rate_at(weekly, monthly, dept, day):
+    """その日の原価率と、それがどこから来たか。
+
+    棚卸が届いている期間 → その週の率（確定）
+    届いていない先       → 直近の週の率（推定）
+    棚卸そのものが無い   → 会計の月次率に落ちる
+    """
+    rows = weekly.get(dept)
+    if rows:
+        for end, rate in rows:
+            if day <= end:
+                return rate, False, end
+        return rows[-1][1], True, rows[-1][0]
+    month = day[:7]
+    cost, est = settled_value(monthly.get(dept, {}), month, "cost")
+    base, _ = settled_value(monthly.get(dept, {}), month, "sales")
+    source = month if month in monthly.get(dept, {}) else max(
+        [m for m in monthly.get(dept, {}) if m < month], default=month)
+    return ((cost / base) if cost is not None and base else None), est, source
+
+
 def _calendar_days(month):
     year, mon = int(month[:4]), int(month[5:7])
     first = datetime.date(year, mon, 1)
@@ -188,7 +253,7 @@ def build_ladder(cfg, month, trial):
         tax = max(0.0, pretax) * rate
         return [
             ("売上高", sales, 1, ""),
-            ("売上原価", sales - gross, -1, "月次の原価率を日次売上に当てたもの"),
+            ("売上原価", sales - gross, -1, "週次の棚卸から出した原価率 × 日次売上"),
             ("売上総利益", gross, 0, ""),
             ("人件費", labor, -1, "勤怠の人時 × 会計の人時単価"),
             ("その他販管費", sga, -1, "月額を営業日数で割ったもの"),
@@ -325,6 +390,140 @@ def build_cash(cfg, month, balances, buys, by_date, ladder_block, yoy_offset, st
                           "series": [(d, buys.get(d, 0.0)) for d in sorted(by_date)]})
 
 
+def budget_weight(cfg, month):
+    """その月に、年間予算の何ヶ月ぶんを割り当てるか。
+
+    **実在の会社は年間予算を12等分しない。** 12月は伸び、2月は沈む。
+    一律で置くと閑散月は毎年必ず全部門が未達になり、予算比の欄が読まれなくなる
+    ── 偽陽性ばかりの警報は、安心ではなく麻痺を生む。
+    """
+    weights = (cfg.budget or {}).get("月別の重み") or {}
+    return float(weights.get(str(int(month[5:7])), 1.0))
+
+
+def monthly_op_budget(cfg, month):
+    base = (cfg.budget or {}).get("monthly_operating_profit")
+    return base * budget_weight(cfg, month) if base else None
+
+
+def dept_gross_budget(cfg, month, dept):
+    base = ((cfg.budget or {}).get("department_gross") or {}).get(dept)
+    return base * budget_weight(cfg, month) if base else None
+
+
+def fiscal_months(start_month, anchor):
+    """anchor が属する事業年度の12ヶ月を、期首から順に返す。"""
+    year = anchor.year if anchor.month >= start_month else anchor.year - 1
+    out = []
+    for i in range(12):
+        m = start_month + i
+        out.append("%04d-%02d" % (year + (m - 1) // 12, (m - 1) % 12 + 1))
+    return out
+
+
+def build_year(conn, cfg, yoy_offset=364):
+    """事業年度の視点。**会社の損益は月ごとに確定し、年間へ積み上がる。**
+
+    日次の推移を2ヶ月半だらだら並べても、経営の見方にはならない。
+    要るのは2つ ── **今月をどう着地するか**と、**その積み上げが年間でどこへ行くか**。
+
+    当期の各月は3つの状態のどれかになる。
+
+      確定 … 会計が締めた月。実績そのもの
+      当月 … まだ締まっていない。日次の実績 ＋ 残り営業日の見込み（＝着地見込み）
+      予測 … まだ来ていない月。前年同月 × 当期のここまでの進み具合
+
+    **直近の月が予測になるからこそ、締めを待たずに年間が見える。** それがこの画面の意味。
+    """
+    book = build(conn, cfg, yoy_offset)
+    month_block = book["month"]
+    if month_block is None:
+        return None
+
+    start_month = (cfg.fiscal or {}).get("start_month", 4)
+    monthly = load_monthly(conn)
+    settled = {}
+    for dept, rows in monthly.items():
+        for month, v in rows.items():
+            box = settled.setdefault(month, {"sales": 0.0, "cost": 0.0, "labor": 0.0, "sga": 0.0})
+            for key in box:
+                box[key] += v.get(key, 0) or 0
+
+    def shift_month(month, back=12):
+        year, mon = int(month[:4]), int(month[5:7])
+        return "%04d-%02d" % (year - back // 12, mon)
+
+    def row(month, state):
+        if state == "確定":
+            v = settled[month]
+            gross = v["sales"] - v["cost"]
+            return {"month": month, "state": state, "sales": v["sales"], "gross": gross,
+                    "labor": v["labor"], "sga": v["sga"],
+                    "op": gross - v["labor"] - v["sga"]}
+        if state == "当月":
+            return {"month": month, "state": state,
+                    "sales": month_block["forecast_sales"], "gross": month_block["forecast_gross"],
+                    "labor": month_block["forecast_labor"], "sga": month_block["forecast_fixed"],
+                    "op": month_block["forecast_op"]}
+        return None
+
+    this_months = fiscal_months(start_month, datetime.date.fromisoformat(month_block["month"] + "-01"))
+    last_months = [shift_month(m) for m in this_months]
+
+    # 当期のここまでの進み具合。**項目ごとに出す。**
+    #
+    # 売上の伸びだけを粗利に当てて人件費を前年据え置きにすると、営業レバレッジで
+    # 利益が実態よりふくらむ（売上+2.8%のはずが営業利益+26%になる）。
+    # 人件費が前年比+3%で来ているなら、残りの月も+3%で置く ── それだけの話にする。
+    # **予測モデルは使わない。説明できる比例配分だけ。**
+    done = [m for m in this_months if m in settled and shift_month(m) in settled]
+    pace = {}
+    for key in ("sales", "cost", "labor", "sga"):
+        base = sum(settled[shift_month(m)][key] for m in done)
+        pace[key] = (sum(settled[m][key] for m in done) / base) if base else 1.0
+
+    rows = []
+    for month in this_months:
+        if month in settled:
+            rows.append(row(month, "確定"))
+        elif month == month_block["month"]:
+            rows.append(row(month, "当月"))
+        else:
+            back = shift_month(month)
+            v = settled.get(back)
+            if v is None:
+                rows.append({"month": month, "state": "予測", "sales": 0.0, "gross": 0.0,
+                             "labor": 0.0, "sga": 0.0, "op": 0.0})
+                continue
+            sales = v["sales"] * pace["sales"]
+            gross = sales - v["cost"] * pace["cost"]
+            labor = v["labor"] * pace["labor"]
+            sga = v["sga"] * pace["sga"]
+            rows.append({"month": month, "state": "予測", "sales": sales, "gross": gross,
+                         "labor": labor, "sga": sga, "op": gross - labor - sga})
+
+    prior = [row(m, "確定") for m in last_months if m in settled]
+
+    def total(items, key):
+        return sum(x[key] for x in items)
+
+    base = (cfg.budget or {}).get("monthly_operating_profit")
+    return {
+        "start_month": start_month,
+        "pace": pace,
+        "this_year": {"label": "%s年度" % this_months[0][:4], "months": rows,
+                      "sales": total(rows, "sales"), "gross": total(rows, "gross"),
+                      "op": total(rows, "op")},
+        "last_year": {"label": "%s年度" % last_months[0][:4], "months": prior,
+                      "sales": total(prior, "sales"), "gross": total(prior, "gross"),
+                      "op": total(prior, "op")},
+        "budget": (sum(monthly_op_budget(cfg, m) for m in this_months)) if base else None,
+        # 月ごとの予算も返す。年間の絵の中で、山の月と谷の月に別の線を引くため。
+        "monthly_budget": ({m: monthly_op_budget(cfg, m) for m in this_months}
+                           if base else {}),
+    }
+
+
 def build(conn, cfg, yoy_offset=364):
     monthly = load_monthly(conn)
     sales, hours = load_daily(conn)
@@ -344,10 +543,12 @@ def build(conn, cfg, yoy_offset=364):
         for day, h in by.items():
             dept_hours.setdefault(dept, {})[_month_of(day)] = dept_hours.setdefault(dept, {}).get(_month_of(day), 0) + h
 
-    def cost_rate(dept, month):
-        row, est = settled_value(monthly.get(dept, {}), month, "cost")
-        base, _ = settled_value(monthly.get(dept, {}), month, "sales")
-        return ((row / base) if row is not None and base else None), est
+    weekly = weekly_cost_rates(conn)
+
+    def cost_rate(dept, day):
+        """その日の原価率。**棚卸から出した週次の率**を使う。"""
+        rate, est, _ = rate_at(weekly, monthly, dept, day)
+        return rate, est
 
     def wage(dept, month):
         labor, est = settled_value(monthly.get(dept, {}), month, "labor")
@@ -370,7 +571,7 @@ def build(conn, cfg, yoy_offset=364):
         for dept in selling:
             amount = sales.get(dept, {}).get(day, 0.0)
             s += amount
-            rate, est = cost_rate(dept, month)
+            rate, est = cost_rate(dept, day)
             estimated |= est
             c += amount * (rate or 0)
         for dept in list(hours):
@@ -436,7 +637,7 @@ def build(conn, cfg, yoy_offset=364):
         else:
             ly_cumulative.append(None)
 
-    budget = (cfg.budget or {}).get("monthly_operating_profit")
+    budget = monthly_op_budget(cfg, this_month)
     ly_op = total("op", shifted(calendar))
 
     month_block = {
@@ -454,7 +655,8 @@ def build(conn, cfg, yoy_offset=364):
         "last_year_labor": total("labor", shifted(calendar)),
         "budget": budget,
         "vs_budget": ((forecast_op / budget - 1) * 100) if budget else None,
-        "gross_budget": sum(((cfg.budget or {}).get("department_gross") or {}).values()) or None,
+        "gross_budget": (sum(((cfg.budget or {}).get("department_gross") or {}).values())
+                         * budget_weight(cfg, this_month)) or None,
         "last_year_op": ly_op,
         "vs_last_year": ((forecast_op / ly_op - 1) * 100) if ly_op else None,
         "cumulative": cumulative, "last_year_cumulative": ly_cumulative,
@@ -463,10 +665,11 @@ def build(conn, cfg, yoy_offset=364):
     }
 
     # ------------------------------------------------------------ 部門別：何が伸びて、何が落ちているか
-    dept_budget = ((cfg.budget or {}).get("department_gross") or {})
+    dept_budget = {name: dept_gross_budget(cfg, this_month, name)
+                   for name in ((cfg.budget or {}).get("department_gross") or {})}
     departments = {}
     for dept in selling:
-        rate, _ = cost_rate(dept, this_month)
+        rate, _ = cost_rate(dept, all_days[-1])
         def gross_of(dates):
             return sum(sales.get(dept, {}).get(d, 0.0) * (1 - (rate or 0)) for d in dates)
         actual_g = gross_of(actual)
@@ -475,7 +678,7 @@ def build(conn, cfg, yoy_offset=364):
         dept_pace = (sum(sales.get(dept, {}).get(d, 0.0) for d in actual) / ly_g_actual) if ly_g_actual else 1.0
         forecast_g = actual_g + ly_g_rest * dept_pace * (1 - (rate or 0))
         ly_full = sum(sales.get(dept, {}).get(d, 0.0) for d in shifted(calendar))
-        ly_rate, _ = cost_rate(dept, _month_of(shifted(calendar)[0]))
+        ly_rate, _ = cost_rate(dept, shifted(calendar)[0])
         ly_gross = ly_full * (1 - (ly_rate if ly_rate is not None else (rate or 0)))
         # 当月ここまでの、前年同期との比較（警告の内訳に使う）
         sales_now = sum(sales.get(dept, {}).get(d, 0.0) for d in actual)

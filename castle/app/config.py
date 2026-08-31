@@ -26,6 +26,7 @@ class Config:
         self.search_readings = raw.get("search_readings", {})
         self.budget = raw.get("budget", {})
         self.accounting = raw.get("accounting", {})
+        self.fiscal = raw.get("fiscal", {"start_month": 4})
         self.backup = raw.get("backup", {})
 
         self._lookup = {}

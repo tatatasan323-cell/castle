@@ -87,10 +87,15 @@ table.ladder.small td{padding:7px 10px}
 .tabbar label:hover{color:var(--accent)}
 #ch-total:checked~.tabbar label[for="ch-total"],
 #ch-amount:checked~.tabbar label[for="ch-amount"],
-#ch-rate:checked~.tabbar label[for="ch-rate"]{
+#ch-rate:checked~.tabbar label[for="ch-rate"],
+#ch-year:checked~.tabbar label[for="ch-year"]{
   color:var(--accent);border-color:var(--accent-dim);box-shadow:var(--glow-soft)}
+.verdict{font-size:13.5px;line-height:1.85;margin:14px 0 0;color:var(--ink)}
+.verdict b{font-size:15px}.verdict b.ok{color:var(--ok)}
+.verdict b.warn{color:var(--warn)}.verdict b.bad{color:var(--bad)}
 .panel{display:none}
-#ch-total:checked~#p-total,#ch-amount:checked~#p-amount,#ch-rate:checked~#p-rate{display:block}
+#ch-total:checked~#p-total,#ch-amount:checked~#p-amount,
+#ch-rate:checked~#p-rate,#ch-year:checked~#p-year{display:block}
 
 .keys.series{margin:0 0 10px}
 .keys.series .key{cursor:default;transition:color .15s}

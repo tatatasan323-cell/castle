@@ -126,8 +126,211 @@ def voyage(m, width=940, height=250, pad=36):
     return "".join(out) + "</svg>"
 
 
+def _stack(labels, gap=15.0, low=14.0, high=None):
+    """右端に並べる文字を、重ならない高さへ押し分ける。
+
+    **値が近いほど文字は重なる。** 予算と着地と前期が数%違いなら、
+    線は3本きれいに見えていても、文字は folded になって読めない ──
+    数字が正しくても、読めなければ画面としては嘘をついている。
+
+    引き出し線は付けない。押し分ける幅を1行ぶんに抑え、線と文字の縦の対応を保つ。
+    """
+    order = sorted(range(len(labels)), key=lambda i: labels[i][0])
+    ys = [labels[i][0] for i in order]
+    for k in range(1, len(ys)):
+        ys[k] = max(ys[k], ys[k - 1] + gap)
+    if high is not None and ys and ys[-1] > high:      # 下がはみ出たら上へ押し戻す
+        shift = ys[-1] - high
+        ys = [y - shift for y in ys]
+    for k in range(len(ys) - 2, -1, -1):
+        ys[k] = min(ys[k], ys[k + 1] - gap)
+    ys = [max(y, low) for y in ys]
+    out = [None] * len(labels)
+    for slot, i in enumerate(order):
+        out[i] = ys[slot]
+    return out
+
+
+def year_view(year, width=940):
+    """年間の着地。**会社の損益は月ごとに確定し、それが年間へ積み上がる。**
+
+    日次の推移を延々と並べても経営の視点にはならない。要るのは2つだけ。
+      上 … 月ごとにいくらで着地したか（確定／当月／予測を塗り分ける）
+      下 … その積み上げが年間でどこへ行くか（前期と年間予算に対して）
+
+    **直近の月が予測でも構わない。** 締めを待たずに年間が見えることが、この画面の意味。
+    ただし予測は予測と分かる形でしか描かない ── 実績と同じ塗りにしたら、それは嘘になる。
+    """
+    if not year:
+        return ""
+    rows = year["this_year"]["months"]
+    prior = {m["month"][5:7]: m for m in year["last_year"]["months"]}
+    budget = year["budget"]
+    n = len(rows)
+    pad, right, top = 44, width - 108, 20
+
+    def x_of(i):
+        return pad + (right - pad) * ((i + 0.5) / n)
+
+    # ── 上：月ごとの営業利益
+    h1 = 196
+    per_month = year.get("monthly_budget") or {}
+    vals = ([m["op"] for m in rows] + list(per_month.values()) + [0.0])
+    lo, hi = min(vals), max(vals)
+    span = (hi - lo) or abs(hi) or 1.0
+    lo, hi = lo - span * 0.10, hi + span * 0.16
+
+    def y1(v):
+        return h1 - 26 - (h1 - 26 - top) * ((v - lo) / (hi - lo))
+
+    bw = (right - pad) / n * 0.56
+    out = ['<svg viewBox="0 0 %d %d" role="img" aria-label="月ごとの営業利益">' % (width, h1)]
+    zero = y1(0.0)
+    out.append('<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" stroke="var(--line-2)" stroke-width="1"/>'
+               % (pad, zero, right, zero))
+    if per_month:
+        # 予算の線は月ごとに段になる ── 会社は年間予算を12等分しないから。
+        steps = []
+        for i, m in enumerate(rows):
+            v = per_month.get(m["month"])
+            if v is None:
+                continue
+            steps.append("%.1f,%.1f %.1f,%.1f"
+                         % (x_of(i) - bw / 2 - 3, y1(v), x_of(i) + bw / 2 + 3, y1(v)))
+        out.append('<polyline fill="none" stroke="var(--warn)" stroke-width="1.4" '
+                   'stroke-dasharray="5 4" points="%s"/>' % " ".join(steps))
+        out.append('<text x="%d" y="%.1f" fill="var(--warn)" font-size="11">月の予算</text>'
+                   % (right + 6, y1(per_month[rows[-1]["month"]]) + 4))
+    for i, m in enumerate(rows):
+        v, cx = m["op"], x_of(i)
+        y, hgt = min(y1(v), zero), abs(y1(v) - zero)
+        color = "var(--bad)" if v < 0 else "var(--bar)"
+        if m["state"] == "確定":
+            style = 'fill="%s" fill-opacity=".82"' % color
+        elif m["state"] == "当月":
+            style = ('fill="%s" fill-opacity=".38" stroke="%s" stroke-width="1.6"' % (color, color))
+        else:
+            style = ('fill="%s" fill-opacity=".10" stroke="%s" stroke-width="1.4" '
+                     'stroke-dasharray="4 3"' % (color, color))
+        out.append('<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" rx="2" %s/>'
+                   % (cx - bw / 2, y, bw, max(hgt, 1.0), style))
+        # 前期の同じ月。棒の上に横棒で置く ── 伸びたか縮んだかが、目盛りを読まずに分かる。
+        back = prior.get(m["month"][5:7])
+        if back:
+            out.append('<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="var(--prior)" '
+                       'stroke-width="2.4"/>'
+                       % (cx - bw / 2 - 2, y1(back["op"]), cx + bw / 2 + 2, y1(back["op"])))
+        out.append('<text x="%.1f" y="%d" fill="var(--muted)" font-size="11" text-anchor="middle">'
+                   "%d月</text>" % (cx, h1 - 8, int(m["month"][5:7])))
+    out.append("</svg>")
+
+    # ── 下：累計の着地
+    h2 = 210
+    cum, cum_prior, acc, acc_p = [], [], 0.0, 0.0
+    for m in rows:
+        acc += m["op"]
+        cum.append(acc)
+    for m in year["last_year"]["months"]:
+        acc_p += m["op"]
+        cum_prior.append(acc_p)
+    pool = cum + cum_prior + ([budget] if budget else []) + [0.0]
+    lo2, hi2 = min(pool), max(pool)
+    span2 = (hi2 - lo2) or abs(hi2) or 1.0
+    lo2, hi2 = lo2 - span2 * 0.10, hi2 + span2 * 0.14
+
+    def y2(v):
+        return h2 - 26 - (h2 - 26 - top) * ((v - lo2) / (hi2 - lo2))
+
+    cut = max(len([m for m in rows if m["state"] == "確定"]) - 1, 0)
+
+    def line(values, start=0):
+        return " ".join("%.1f,%.1f" % (x_of(start + i), y2(v)) for i, v in enumerate(values))
+
+    out.append('<svg viewBox="0 0 %d %d" role="img" aria-label="年間の着地">' % (width, h2))
+    if lo2 < 0 < hi2:
+        out.append('<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" stroke="var(--line)" stroke-width="1"/>'
+                   % (pad, y2(0.0), right, y2(0.0)))
+    if budget:
+        out.append('<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" stroke="var(--warn)" stroke-width="1.2" '
+                   'stroke-dasharray="5 4"/>' % (pad, y2(budget), right, y2(budget)))
+    out.append('<polyline fill="none" stroke="var(--prior)" stroke-width="2" points="%s"/>'
+               % line(cum_prior))
+    out.append('<polyline fill="none" stroke="var(--bar)" stroke-width="3" stroke-linejoin="round" '
+               'points="%s"/>' % line(cum[:cut + 1]))
+    out.append('<polyline fill="none" stroke="var(--bar)" stroke-width="2.5" stroke-dasharray="6 5" '
+               'points="%s"/>' % line(cum[cut:], start=cut))
+    out.append('<circle cx="%.1f" cy="%.1f" r="4" fill="var(--bar)"/>' % (x_of(cut), y2(cum[cut])))
+    out.append('<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%d" stroke="var(--line-2)" stroke-width="1"/>'
+               % (x_of(cut), y2(cum[cut]) + 7, x_of(cut), h2 - 24))
+    out.append('<text x="%.1f" y="%d" fill="var(--muted)" font-size="11" text-anchor="middle">'
+               "確定はここまで</text>" % (x_of(cut), h2 - 8))
+    out.append('<circle cx="%.1f" cy="%.1f" r="4" fill="none" stroke="var(--bar)" stroke-width="2"/>'
+               % (x_of(n - 1), y2(cum[-1])))
+
+    tags = [(y2(cum[-1]), "着地 " + money(cum[-1]), "var(--ink)", 13, 700),
+            (y2(cum_prior[-1]), "前期 " + money(cum_prior[-1]), "var(--prior)", 11, 400)]
+    if budget:
+        tags.append((y2(budget), "予算 " + money(budget), "var(--warn)", 11, 400))
+    for (_, text, color, size, weight), y in zip(tags, _stack(tags, 15.0, 14.0, h2 - 30)):
+        out.append('<text x="%d" y="%.1f" fill="%s" font-size="%d" font-weight="%d">%s</text>'
+                   % (right + 6, y + 4, color, size, weight, text))
+    out.append("</svg>")
+    return "".join(out)
+
+
+def year_verdict(year):
+    """年間の着地を、言葉で言い切る。**読み手に判定させない。**
+
+    ただし、**言い切れる強さは、確定した月がどれだけあるかで決まる。**
+    12ヶ月のうち5ヶ月しか締まっていないのに「届く」と言えば、それは予測を実績と偽ること。
+    だから「残りが何%落ちたら届かないか」を添える ── これなら、外れても嘘にならない。
+    """
+    if not year:
+        return ""
+    now, back = year["this_year"], year["last_year"]
+    budget = year["budget"]
+    vs_ly = (now["op"] / back["op"] - 1) * 100 if back["op"] else 0.0
+    settled = [m for m in now["months"] if m["state"] == "確定"]
+    ahead = [m for m in now["months"] if m["state"] != "確定"]
+    bits = ['<p class="verdict">']
+    if budget:
+        gap = now["op"] - budget
+        rate = gap / budget * 100
+        pool = sum(m["op"] for m in ahead)
+        room = (gap / pool * 100) if pool > 0 else None
+        if rate >= 3:
+            word, tone = "届く見通し", "ok"
+        elif rate >= -3:
+            word, tone = "予算とほぼ同じ線", "warn"
+        else:
+            word, tone = "届かない見通し", "bad"
+        bits.append('<b class="%s">年間の着地 %s ── %s</b>（年間予算 %sに対して %s）'
+                    % (tone, money(now["op"]), word, money(budget), pct(rate)))
+        if room is not None:
+            bits.append("<br>確定しているのは%dヶ月ぶん。残り%dヶ月が見込みより<b>%.1f%%</b>下ぶれすると、"
+                        "予算に届きません。" % (len(settled), len(ahead), abs(room)))
+    else:
+        bits.append('<b>年間の着地 %s</b>' % money(now["op"]))
+    bits.append("<br>前期 %sに対して %s。%d月まで確定、%d月は当月の見込み、残り%dヶ月は"
+                "前期の同じ月に当期のここまでの伸び（売上・原価・人件費・経費それぞれ）を"
+                "当てた予測です。"
+                % (money(back["op"]), pct(vs_ly), int(settled[-1]["month"][5:7]),
+                   int(now["months"][len(settled)]["month"][5:7]), len(ahead) - 1))
+    worst = min(now["months"], key=lambda m: m["op"])
+    if worst["op"] < 0:
+        bits.append("<br>%d月は営業赤字の%s（%s）。ここが年間の足を引いています。"
+                    % (int(worst["month"][5:7]),
+                       "実績" if worst["state"] == "確定" else "見込み", money(worst["op"])))
+    bits.append("</p>")
+    return "".join(bits)
+
+
 def movement(departments):
-    """悪い順に並べる。経営者が最初に見たいのは、落ちているほうだから。"""
+    """悪い順に並べる。経営者が最初に見たいのは、落ちているほうだから。
+
+    **記号は、それが指す数字の隣に置く。** 前年比の向きを表す▲▼を部門名の左に置くと、
+    すぐ右の予算比と結びつけて読まれる（▲なのに予算比マイナス、という見た目になる）。
+    """
     order = sorted(departments.items(),
                    key=lambda kv: (kv[1]["vs_budget"] is None, kv[1]["vs_budget"] or 0))
     mark = 78.0                     # 予算の位置（％）。バーがここに届けば達成
@@ -139,28 +342,29 @@ def movement(departments):
                  '<span class="flat">→</span>')
         worst = ' class="worst"' if i == 0 and (v["vs_budget"] or 0) < -5 else ""
         rows.append(
-            "<tr%s><td class=\"name\">%s %s</td><td><b>%s</b></td>"
+            "<tr%s><td class=\"name\">%s</td><td><b>%s</b></td>"
             '<td class="barcell"><div class="bar"><span class="fill" style="width:%.1f%%"></span>'
             '<i class="target" style="left:%.1f%%"></i></div></td>'
-            "<td>%s</td><td>%s</td><td>%.1f%%</td></tr>"
-            % (worst, arrow, escape(name), money(v["forecast_gross"]),
+            "<td>%s</td><td>%s %s</td><td>%.1f%%</td></tr>"
+            % (worst, escape(name), money(v["forecast_gross"]),
                min(mark * v["forecast_gross"] / v["budget"], 100.0) if v["budget"] else 0.0, mark,
-               pct(v["vs_budget"]), pct(v["vs_last_year"]), v["margin"] * 100))
+               pct(v["vs_budget"]), arrow, pct(v["vs_last_year"]), v["margin"] * 100))
     return ('<table><thead><tr><th class="name">部門</th><th>着地見込み粗利</th>'
-            '<th class="barcell"></th><th>予算比</th><th>前年比</th><th>粗利率</th>'
-            "</tr></thead><tbody>%s</tbody></table>" % "".join(rows))
+            '<th class="barcell">予算まで</th><th>予算比</th><th>前年比</th><th>粗利率</th>'
+            "</tr></thead><tbody>%s</tbody></table>"
+            '<p class="legend">棒は、その部門の予算に対してどこまで来たか。'
+            '縦の目印が予算の位置です。▲▼は<b>前年比</b>の向き（±1%%以内は→）。'
+            "予算比の悪い順に並べています ── 経営者が最初に見たいのは落ちているほうなので。</p>"
+            % "".join(rows))
 
 
 PALETTE = ["#5ee0f0", "#e8b866", "#5fd6a4", "#ff7a6b", "#a98cf0", "#7fb4ff", "#f08fc0"]
 
 
 def series_chart(dates, series, unit, chart_id, width=940, height=260, pad=38):
-    """部門を日次で並べて比べる図。
+    """複数の系列を並べて比べる図。x軸のラベルは渡されたものをそのまま使う。
 
-    **月次に丸めない。** 月次は会計の都合であって、経営の都合ではない。
-    日次のまま週ぶんの移動平均をかければ、3ヶ月でも傾向は出る。
-
-    凡例にマウスを乗せるとその部門だけが残る ── JavaScriptは使わず、
+    凡例にマウスを乗せるとその系列だけが残る ── JavaScriptは使わず、
     生成したCSSの :hover と兄弟セレクタだけで実現する。
     """
     pool = [v for _, values in series for v in values if v is not None]
@@ -203,41 +407,38 @@ def series_chart(dates, series, unit, chart_id, width=940, height=260, pad=38):
         grid.append('<text x="%d" y="%.1f" fill="var(--muted)" font-size="10.5">%s</text>'
                     % (right + 8, y_of(value) + 3.5, unit(value)))
 
+    # x軸のラベルは、渡された粒度で描き分ける。
+    # 月次の系列に「月の区切り線」を引くと全点に立ち、目盛りの文字とぶつかる
+    # ── 2026-08-31、部門別を月次にしたときに実際に起きた。
+    monthly = len(dates[0]) == 7
     months = []
-    for i, day in enumerate(dates):
-        if i and day[5:7] != dates[i - 1][5:7]:
-            months.append('<line x1="%.1f" y1="%d" x2="%.1f" y2="%.1f" stroke="var(--line)" '
-                          'stroke-width="1" stroke-dasharray="2 4"/>' % (x_of(i), pad - 10, x_of(i), height - pad))
+    if monthly:
+        for i, key in enumerate(dates):
             months.append('<text x="%.1f" y="%d" fill="var(--muted)" font-size="10.5" '
-                          'text-anchor="middle">%s月</text>' % (x_of(i), pad - 16, day[5:7].lstrip("0")))
+                          'text-anchor="middle">%s月</text>'
+                          % (x_of(i), height - pad + 17, key[5:7].lstrip("0")))
+    else:
+        for i, day in enumerate(dates):
+            if i and day[5:7] != dates[i - 1][5:7]:
+                months.append('<line x1="%.1f" y1="%d" x2="%.1f" y2="%.1f" stroke="var(--line)" '
+                              'stroke-width="1" stroke-dasharray="2 4"/>'
+                              % (x_of(i), pad - 10, x_of(i), height - pad))
+                months.append('<text x="%.1f" y="%d" fill="var(--muted)" font-size="10.5" '
+                              'text-anchor="middle">%s月</text>'
+                              % (x_of(i), pad - 16, day[5:7].lstrip("0")))
+    ends = ("" if monthly else
+            ('<text x="%d" y="%d" fill="var(--muted)" font-size="10.5">%s</text>'
+             '<text x="%d" y="%d" fill="var(--muted)" font-size="10.5" text-anchor="end">%s</text>'
+             % (pad, height - pad + 17, dates[0], right, height - pad + 17, dates[-1])))
+    span = ('<text x="%d" y="%d" fill="var(--muted)" font-size="10.5">%s 〜 %s</text>'
+            % (pad, pad - 16, dates[0], dates[-1])) if monthly else ""
 
     return ('<div class="chart" id="%s"><style>%s</style>'
             '<div class="keys series">%s</div>'
-            '<svg viewBox="0 0 %d %d" role="img" aria-label="部門別の推移">%s%s%s'
-            '<text x="%d" y="%d" fill="var(--muted)" font-size="10.5">%s</text>'
-            '<text x="%d" y="%d" fill="var(--muted)" font-size="10.5" text-anchor="end">%s</text>'
+            '<svg viewBox="0 0 %d %d" role="img" aria-label="部門別の推移">%s%s%s%s%s'
             "</svg></div>"
             % (chart_id, "".join(rules), "".join(legend), width, height,
-               "".join(grid), "".join(months), "".join(lines),
-               pad, height - pad + 17, dates[0], right, height - pad + 17, dates[-1]))
-
-
-def moving_average(values, window=6):
-    """移動平均。**窓が満ちるまでは値を出さない。**
-
-    満ちる前の点を描くと、1日ぶんの生の値が「7営業日移動平均」の顔をして立ち上がり、
-    「最初だけ跳ねている」という読み方を生む。実際は平均になっていないだけである。
-
-    窓は**週の営業日数**に合わせる。週が6営業日なのに窓を7日にすると、
-    毎回1日ずつずれて曜日の谷が窓に出入りし、**均すはずが脈を打つ**
-    （実測：窓7日で振れ12.6%、窓6日で8.4%）。
-    """
-    out = []
-    for i in range(len(values)):
-        chunk = values[max(0, i - window + 1):i + 1]
-        got = [v for v in chunk if v is not None]
-        out.append(sum(got) / len(got) if len(chunk) == window and got else None)
-    return out
+               "".join(grid), "".join(months), "".join(lines), ends, span))
 
 
 def ladder(book):

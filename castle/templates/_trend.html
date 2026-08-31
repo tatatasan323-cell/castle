@@ -1,13 +1,15 @@
 <section>
-  <h2>推移</h2>
+  <h2>着地の見通し ── 今月と、年間</h2>
   <div class="voyage tabs">
     <input type="radio" name="chart" id="ch-total" checked>
     <input type="radio" name="chart" id="ch-amount">
     <input type="radio" name="chart" id="ch-rate">
+    <input type="radio" name="chart" id="ch-year">
     <div class="tabbar">
-      <label for="ch-total">航海図（今月の累計営業利益）</label>
-      <label for="ch-amount">部門別 粗利の推移</label>
-      <label for="ch-rate">部門別 粗利率の推移</label>
+      <label for="ch-total">今月の着地（累計営業利益）</label>
+      <label for="ch-year">年間の着地</label>
+      <label for="ch-amount">部門別 粗利の推移（月次）</label>
+      <label for="ch-rate">部門別 粗利率の推移（月次）</label>
     </div>
 
     <div class="panel" id="p-total">
@@ -20,15 +22,34 @@
       </div>
     </div>
 
+    <div class="panel" id="p-year">
+      $year_view
+      $year_verdict
+      <div class="keys">
+        <span><i style="background:var(--bar)"></i>確定した月</span>
+        <span><i style="background:var(--bar);opacity:.38"></i>当月（着地の見込み）</span>
+        <span><i class="dash"></i>まだ来ていない月（予測）</span>
+        <span><i style="background:var(--prior)"></i>前期の同じ月</span>
+        <span><i style="background:var(--warn)"></i>予算</span>
+      </div>
+      <div class="legend"><b>この画面が答えないこと。</b>先の月は予測です ──
+        前期の同じ月に、当期のここまでの伸び（売上・原価・人件費・経費それぞれ）を当てただけのもので、
+        これから取る打ち手も、来ると分かっている大口の増減も入っていません。
+        予測の精度を上げるのではなく、<b>確定した月が増えるたびに予測が自動で置き換わる</b>ことに意味があります。</div>
+    </div>
+
     <div class="panel" id="p-amount">
       $dept_amount
-      <div class="legend">日次の粗利を週ぶん（6営業日）の移動平均で均したもの（週が6営業日なので窓も6日。ずれると曜日の谷が脈を打つ）。凡例に触れると、その部門だけが残ります。</div>
+      <div class="legend">部門ごとの月次粗利、直近$chart_monthsヶ月。
+        <b>会社の損益は月ごとに確定します</b>から、部門の良し悪しも月の単位で見ます。
+        12ヶ月あれば季節も出ます。凡例に触れると、その部門だけが残ります。</div>
     </div>
 
     <div class="panel" id="p-rate">
       $dept_rate
-      <div class="legend">粗利率は<b>月が締まった瞬間にしか動きません</b> ── 原価が月次でしか出ないため。
-        だから階段になります。日次で動かすには、原価を日次で持つ必要があります。</div>
+      <div class="legend">粗利率は、その月の売上原価（期首在庫＋仕入−期末在庫）を売上で割ったもの。
+        <b>率で見ると、金額の大小に隠れた部門の変調が出ます</b> ── 売上が伸びていても率が落ちていれば、
+        値引きか相場高のどちらかが起きています。</div>
     </div>
   </div>
 </section>

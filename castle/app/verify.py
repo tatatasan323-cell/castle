@@ -28,9 +28,20 @@ APP = db.ROOT / "castle" / "app"
 RESULTS = []
 
 
-def check(name, ok, detail=""):
-    RESULTS.append((ok, name, detail))
-    print("  %s %s%s" % ("OK  " if ok else "NG  ", name, ("  ── " + detail) if detail else ""))
+def yen_(v):
+    return format(int(v), ",") + "円"
+
+
+def check(name, ok, detail="", why=""):
+    """name＝何を見たか、detail＝測った値（いつでも出す）、why＝落ちた時だけ言うこと。
+
+    落ちた時の説明を通った時にも出すと、通っているのに事故に見える
+    （「OK 足し算が合っている ── 37.7 + 10.3 − 31.5 ≠ 16.6」）。
+    **判定ログもまた、人が読む成果物。**
+    """
+    text = detail if ok else "  ".join(x for x in (detail, why) if x)
+    RESULTS.append((ok, name, text))
+    print("  %s %s%s" % ("OK  " if ok else "NG  ", name, ("  ── " + text) if text else ""))
     return ok
 
 
@@ -424,8 +435,16 @@ def _run(instance):
           "数量減は意図的" in html and html.count('class="attached"') > 0,
           "申し送り %s ／ 知識の添付 %d箇所"
           % ("あり" if "数量減は意図的" in html else "無し", html.count('class="attached"')))
-    check("推移の切り替えが3枚ある（全社／部門別の額／部門別の率）",
-          top.count('class="panel"') == 3, "CSSタブ")
+    check("推移の切り替えが4枚ある（今月の着地／年間の着地／部門別の額／部門別の率）",
+          top.count('class="panel"') == 4, "CSSタブ %d枚" % top.count('class="panel"'))
+    # タブは「切り替わって初めてタブ」。入口・見出し・中身の3つが揃っているかを見る。
+    for tab in ("total", "year", "amount", "rate"):
+        check("%s のタブが切り替わる" % tab,
+              all(x in top for x in ('id="ch-%s"' % tab, 'label[for="ch-%s"]' % tab.replace("x", "x"),
+                                     'id="p-%s"' % tab))
+              or ('id="ch-%s"' % tab in top and 'id="p-%s"' % tab in top
+                  and '#ch-%s:checked~#p-%s' % (tab, tab) in board),
+              "入口・切替CSS・中身")
     check("部門別の線が部門数ぶん引かれている",
           top.count('class="s s') >= len(measured) * 2, "%d本" % top.count('class="s s'))
     check("人時生産性は下に格下げされている",
@@ -536,7 +555,7 @@ def _run(instance):
     # 配布されるのは dashboard.html 単体。サーバが無くても読み方が読めないと意味がない。
     standalone = (instance / "out" / "dashboard.html").read_text(encoding="utf-8")
     check("ダッシュボード単体にも読み方が入っている", "この画面の読み方" in standalone)
-    for word in ("推定", "傾向", "単発", "内訳"):
+    for word in ("推定", "傾向", "単発", "内訳", "年間", "予測", "下ぶれ"):
         check("読み方が「%s」に触れている" % word, word in standalone)
 
     users.issue(instance, "ガイド検査")
@@ -574,7 +593,8 @@ def _run(instance):
               rows[0]["reason"] if rows else "写せなかった")
         check("写した先で開き直して件数が一致する",
               rows and rows[0].get("records") == made["expected"],
-              "%s ≠ %s" % (rows[0].get("records") if rows else "—", made["expected"]))
+              "写した先 %s件 ／ 原本 %s件"
+              % (rows[0].get("records") if rows else "—", made["expected"]))
 
         # 写せなかったときに黙って成功と言わないか（存在しないドライブを指す）
         bad = backup.mirror(made, [pathlib.Path("Z:/castle-nowhere")])
@@ -629,7 +649,9 @@ def _run(instance):
     loose = [c["name"] for c in cards if c["verdict"] == "順調" and c["vs_target"] < 0]
     check("凡例の言葉が判定規則と食い違っていない",
           not (loose and "順調＝目標以上" in board),
-          "目標比マイナスでも順調と出る（%s）のに、凡例が「目標以上」と書いている" % "、".join(loose))
+          "凡例と食い違う判定 %d件" % len(loose),
+          why="目標比マイナスでも順調と出る（%s）のに、凡例が「目標以上」と書いている"
+              % "、".join(loose))
 
     rank = {v: n for n, v in enumerate(VERDICTS)}
     rest = cards[1:]
@@ -714,7 +736,7 @@ def _run(instance):
     check("CCCの足し算が合っている",
           abs((ccc.get("receivable_days", 0) + ccc.get("inventory_days", 0)
                - ccc.get("payable_days", 0)) - ccc.get("days", -999)) < 0.1,
-          "売掛%.1f + 棚卸%.1f − 買掛%.1f ≠ %.1f"
+          "売掛%.1f + 棚卸%.1f − 買掛%.1f → %.1f日"
           % (ccc.get("receivable_days", 0), ccc.get("inventory_days", 0),
              ccc.get("payable_days", 0), ccc.get("days", 0)))
     check("運転資本 = 売掛 + 棚卸 − 買掛 になっている",
@@ -950,7 +972,7 @@ def _run(instance):
           "%d件" % (hit[0]["count"] if hit else 0))
     check("閾値に届かないものは名指ししない",
           not [r for r in found if r["subject"] == "低温食品部"],
-          "低温食品部は1件しかないのに挙がっている")
+          "1件しかない部門は挙がっていない", why="低温食品部が挙がっている")
 
     seed = promote.draft(conn, hit[0]["ids"][0])
     check("申し送りの本文を持ったまま知識の入力へ渡せる",
@@ -1002,7 +1024,7 @@ def _run(instance):
     conn.commit()
     left = [g for g in promote.repeats(conn, threshold=3) if g["subject"] == "畜産部"]
     check("塊ぜんぶが上げ済みになる（1件だけ残らない）", not left,
-          "まだ %d件 残っている" % (left[0]["count"] if left else 0))
+          "名指しに残った件数 %d" % (left[0]["count"] if left else 0))
 
     conn.execute("DELETE FROM records WHERE id > ?", (mark,))
     conn.commit()
@@ -1020,14 +1042,16 @@ def _run(instance):
 
     check("在庫が入っている", len(stock) >= 8, "%d時点" % len(stock))
     # 年をまたぐ隙間（前年データと当年データのあいだ）は数えない
-    gaps = sorted({g for g in
-                   ((datetime.date.fromisoformat(b) - datetime.date.fromisoformat(a)).days
-                    for a, b in zip(sorted(stock), sorted(stock)[1:])) if g < 60})
-    check("在庫は週次で上がってくる（7日おき）", gaps and max(gaps) <= 7 and min(gaps) >= 5,
-          "間隔 %s日" % "／".join(str(g) for g in gaps))
+    gaps = [g for g in
+            ((datetime.date.fromisoformat(b) - datetime.date.fromisoformat(a)).days
+             for a, b in zip(sorted(stock), sorted(stock)[1:])) if g < 60]
+    # 期首から最初の週末までは7日に満たない。そこは正しい挙動なので数えない。
+    check("在庫は週次で上がってくる（7日おき）",
+          gaps and max(gaps) <= 7 and gaps.count(7) >= len(gaps) - 2,
+          "間隔 %s日" % "／".join(str(g) for g in sorted(set(gaps))))
     check("会計の月末残高に棚卸資産を二重に持っていない",
           "棚卸資産" not in (cfg.accounting.get("balance") or {}),
-          "残高側にも棚卸資産がある ── 出どころが2つになる")
+          "在庫の出どころは棚卸だけ", why="残高側にも棚卸資産がある ── 出どころが2つになる")
 
     # 週次の実データが、仕入と売上原価の流れと繋がっているか
     stamps = sorted(stock)
@@ -1048,9 +1072,11 @@ def _run(instance):
     daily = pnl.daily_stock(conn, cfg)
     check("日次の在庫が出ている", len(daily) >= 60, "%d日" % len(daily))
     fixed = [d for d, v in daily.items() if v["settled"]]
+    # 日次の在庫が届いている範囲に入っている棚卸だけを数える（前年ぶんは範囲外）
+    covered = [d for d in stock if min(daily) <= d <= max(daily)]
     check("確定した日と、置いた日が区別されている",
-          len(fixed) == len(stock) and len(fixed) < len(daily),
-          "確定 %d日 ／ 全体 %d日" % (len(fixed), len(daily)))
+          len(fixed) == len(covered) and len(fixed) < len(daily),
+          "確定 %d日 ／ 範囲内の棚卸 %d回 ／ 全体 %d日" % (len(fixed), len(covered), len(daily)))
     check("確定した日は、実データそのままになっている",
           all(abs(daily[d]["amount"] - stock[d]) < 1.0 for d in fixed))
 
@@ -1089,40 +1115,8 @@ def _run(instance):
           "在庫日数" in board and "週次" in board)
 
     print("")
-    print("【22】均した線が、本当に均されているか")
-    # 「7営業日移動平均」と名乗る線がギザギザなら、その名前が嘘になる。
+    print("【22】在庫の推定が、週のあいだで暴れないか")
     ledger2 = pnl.build(conn, cfg)
-    week = len(pnl.business_weekdays([d["date"] for d in ledger2["days"]]))
-    check("週の営業日数を数えられる", 5 <= week <= 7, "%d日" % week)
-
-    buy = pnl.load_purchase(conn)
-    span = [d["date"] for d in ledger2["days"] if d["date"] >= "2026-06-01"]
-    raw = [buy.get(d, 0.0) for d in span]
-    smooth = screen.moving_average(raw, week)
-
-    # 窓が満ちるまでは値を出さない。1日ぶんの生の値を「移動平均」として描かない。
-    check("窓が満ちるまでは値を出さない",
-          all(v is None for v in smooth[:week - 1]) and smooth[week - 1] is not None,
-          "先頭 %s" % smooth[:week])
-
-    def jitter(values):
-        """隣り合う日の変化率。**幅ではなくギザギザそのもの**を測る。
-
-        幅（最大−最小）では、期間中の本当の伸びまで数えてしまい、
-        「均せているか」を判定できない。
-        """
-        got = [v for v in values if v is not None]
-        diffs = [abs(b - a) / a * 100 for a, b in zip(got, got[1:]) if a]
-        return sum(diffs) / len(diffs) if diffs else 0.0
-
-    check("均したあとがギザギザでない（日々の変化1%未満）", jitter(smooth) < 1.0,
-          "生 %.2f%% → 均した後 %.2f%%（窓が週の長さとずれると脈を打つ）"
-          % (jitter(raw), jitter(smooth)))
-    check("窓が週の営業日数と合っている",
-          jitter(smooth) < jitter(screen.moving_average(raw, week + 1)),
-          "窓%d日 %.2f%% ／ 窓%d日 %.2f%%"
-          % (week, jitter(smooth), week + 1, jitter(screen.moving_average(raw, week + 1))))
-
     # 在庫の推定は、週の中で大きく上下しない（動いているのは在庫ではなく割る側）
     stock_daily = pnl.daily_stock(conn, cfg, ledger2["days"])
     weeks = {}
@@ -1135,18 +1129,192 @@ def _run(instance):
         return (max(values) - min(values)) / (sum(values) / len(values)) * 100
 
     worst = max((span(v), k) for k, v in weeks.items() if len(v) >= 4)
-    # 凡例に書いてある日数と、実際に使った窓が違えば、数字が合っていても嘘になる。
+    # 凡例に書いてあることと実装が違えば、数字が合っていても嘘になる。
+    # 部門別の推移を月次にしたので、画面のどこにも「移動平均」「日次」は残っていないはず。
     board2 = (instance / "out" / "dashboard.html").read_text(encoding="utf-8")
+    ghost = [w for w in ("移動平均", "営業日）の移動") if w in board2]
+    check("消した仕組みの説明が画面に残っていない", not ghost, "残り: %s" % ghost)
     import re as _re
-    said = {int(m) for m in _re.findall(r"(\d+)営業日）の移動平均", board2)}
-    said |= {int(m) for m in _re.findall(r"(\d+)営業日の移動平均", board2)}
-    check("凡例に書いた日数と、実際の窓が一致している", said == {week} or not said,
-          "凡例=%s ／ 実際=%d日" % (sorted(said) or "記載なし", week))
+    axis = _re.findall(r"(\d{4}-\d{2}) 〜 (\d{4}-\d{2})", board2)
+    check("部門別の推移が月の単位で並んでいる", bool(axis)
+          and (int(axis[0][1][:4]) - int(axis[0][0][:4])) * 12
+              + int(axis[0][1][5:7]) - int(axis[0][0][5:7]) >= 11,
+          "軸の範囲 %s" % (str(axis[0]) if axis else "無し",))
 
     check("在庫の推定が、週の中で暴れない", worst[0] < 4.0,
           "いちばん振れた週で %.1f%%（在庫ではなく、割る側の日商原価が動いている）" % worst[0])
 
+    print("")
+    print("【23】在庫は、粗利を出すための入力になっているか")
+    # 在庫を数える理由は、売上原価が「期首＋仕入−期末」で出るから。
+    # 在庫が粗利に効いていないなら、週次で数える意味がない。
+    rates = pnl.weekly_cost_rates(conn, cfg)
+    check("部門ごと・週ごとの原価率が出ている", len(rates) >= 7,
+          "%d部門" % len(rates))
+    weeks = max((len(v) for v in rates.values()), default=0)
+    check("週の本数ぶんある", weeks >= 8, "%d週" % weeks)
+
+    # 会計が締まっていない当月でも、棚卸があれば原価率は出る
+    last_month = max(m for m in {r["occurred_at"][:7] for r in conn.execute(
+        "SELECT occurred_at FROM records WHERE kind='売上'")})
+    settled_months = {r[0][:7] for r in conn.execute(
+        "SELECT occurred_at FROM records WHERE kind='部門損益'")}
+    check("当月は会計が締まっていない", last_month not in settled_months, last_month)
+    fresh = [d for v in rates.values() for d, _ in v if d[:7] == last_month]
+    check("それでも当月の原価率が、棚卸から出ている", fresh,
+          "当月の週次原価率 %d本" % len(fresh))
+
+    # 棚卸から出した率と、会計が後から出す率が合っているか（貸借と損益の繋がり）
+    monthly = pnl.load_monthly(conn)
+    gaps = []
+    for dept, rows in rates.items():
+        for month in sorted(monthly.get(dept, {})):
+            got = [r for d, r in rows if d[:7] == month]
+            acc = monthly[dept][month]
+            if not got or not acc["sales"]:
+                continue
+            gaps.append(abs(sum(got) / len(got) - acc["cost"] / acc["sales"]) * 100)
+    check("棚卸から出した原価率が、会計の月次率と合う（1pt以内）",
+          gaps and max(gaps) < 1.0, "いちばん離れた月で %.2fpt" % (max(gaps) if gaps else 99))
+
+    # いちばん大事な判定 ── 在庫を動かしたら、粗利が動くか
+    before = pnl.build(conn, cfg)["month"]["forecast_gross"]
+    conn.execute("UPDATE records SET body=json_set(body,'$.amount', amount * 1.02) "
+                 "WHERE kind='在庫' AND occurred_at >= ?", (max(pnl.load_stock(conn)),))
+    after = pnl.build(conn, cfg)["month"]["forecast_gross"]
+    conn.rollback()
+    check("在庫を動かすと、粗利が動く（＝在庫が入力になっている）",
+          abs(after - before) > 1.0,
+          "動かなかった ── 在庫は粗利に効いていない" if abs(after - before) <= 1.0
+          else "%s → %s" % (yen_(before), yen_(after)))
+
+    print("")
+    print("【24】実在の会社として成り立っているか")
+    # 3ヶ月ぶんの飛び飛びのデータでは、年間の着地は原理的に出せない。
+    months = sorted({r[0] for r in conn.execute(
+        "SELECT DISTINCT substr(occurred_at,1,7) FROM records WHERE kind='売上'")})
+    check("売上が16ヶ月以上ある", len(months) >= 16, "%dヶ月（%s〜%s）"
+          % (len(months), months[0], months[-1]))
+
+    def step(a, b):
+        ya, ma = int(a[:4]), int(a[5:7])
+        yb, mb = int(b[:4]), int(b[5:7])
+        return (yb - ya) * 12 + (mb - ma)
+
+    holes = [(a, b) for a, b in zip(months, months[1:]) if step(a, b) != 1]
+    check("月が飛んでいない", not holes, "飛び: %s" % holes[:3])
+
+    fiscal = (cfg.fiscal or {}).get("start_month")
+    check("事業年度が決まっている（何月始まりか）", fiscal in range(1, 13), str(fiscal))
+
+    year = pnl.build_year(conn, cfg)
+    check("前期が通年（12ヶ月）そろっている", len(year["last_year"]["months"]) == 12,
+          "%dヶ月" % len(year["last_year"]["months"]))
+    kinds = {m["state"] for m in year["this_year"]["months"]}
+    check("当期の月が3つの状態に分かれている（確定／当月／予測）",
+          kinds == {"確定", "当月", "予測"}, str(sorted(kinds)))
+    settled = [m for m in year["this_year"]["months"] if m["state"] == "確定"]
+    check("締まった月が2つ以上ある", len(settled) >= 2, "%dヶ月" % len(settled))
+    check("当月はちょうど1つ",
+          len([m for m in year["this_year"]["months"] if m["state"] == "当月"]) == 1)
+
+    # 年間の着地＝確定の積み上げ ＋ 当月の見込み ＋ 先の月の予測
+    total = sum(m["op"] for m in year["this_year"]["months"])
+    check("年間の着地が、月ごとの積み上げと一致する",
+          abs(total - year["this_year"]["op"]) < 1.0,
+          "積み上げ %.0f ／ 年間 %.0f" % (total, year["this_year"]["op"]))
+    check("年間の着地が前期と比べられる", year["last_year"]["op"] != 0,
+          "前期の営業利益 %s" % yen_(year["last_year"]["op"]))
+
+    # 賞与は引当でならす。だから損益は跳ねない ── 跳ねたら年間の着地が読めない。
+    # 「支給月に人件費が跳ねる」判定を最初に書いたが、それは会計の実務として誤り。
+    # 資金のほうは跳ねる。**損益と資金は別に動く。** 両方を見る。
+    labor = sorted(m["labor"] for m in year["last_year"]["months"])
+    mid = labor[len(labor) // 2]
+    check("賞与が引当でならされている（月次損益が跳ねない）", labor[-1] < mid * 1.25,
+          "いちばん高い月 %s ／ 中央 %s" % (format(labor[-1], ","), format(mid, ",")))
+    cash_by_month = {r[0]: r[1] for r in conn.execute(
+        "SELECT substr(occurred_at,1,7), amount FROM records"
+        " WHERE kind='残高' AND subject='現金及び預金' ORDER BY occurred_at")}
+    cash_flow = {b: cash_by_month[b] - cash_by_month[a]
+                 for a, b in zip(sorted(cash_by_month), sorted(cash_by_month)[1:])}
+    bonus_m = [m for m in cash_flow if int(m[5:7]) in (6, 12)]
+    other = [cash_flow[m] for m in cash_flow if m not in bonus_m]
+    check("賞与の支給月は、資金のほうが落ち込む", bool(bonus_m)
+          and max(cash_flow[m] for m in bonus_m) < sum(other) / len(other),
+          "賞与月 %s ／ ほかの月の平均 %s"
+          % (format(int(max(cash_flow[m] for m in bonus_m)), ","),
+             format(int(sum(other) / len(other)), ",")))
+    sales = {m["month"]: m["sales"] for m in year["last_year"]["months"]}
+    top, bottom = max(sales, key=sales.get), min(sales, key=sales.get)
+    check("年間で山と谷がある（季節がある）",
+          sales[top] / sales[bottom] > 1.15,
+          "山 %s / 谷 %s ＝ %.2f倍" % (top, bottom, sales[top] / sales[bottom]))
+
+    print("【25】画面の文字が、重なって読めなくなっていないか")
+    # 値が近いほど、右端に添えた文字は折り重なる（予算3.60億・着地3.68億・前期3.33億）。
+    # 線は3本きれいに見えているので、**判定が全部緑でも気づかない。**
+    # 2026-08-31、年間の着地の画面で実際に踏んだ。だから数える側へ移した。
+    import re as _re3
+    board3 = (instance / "out" / "dashboard.html").read_text(encoding="utf-8")
+    pairs, checked = [], 0
+
+    # 言い切った言葉と、実際の差が合っているか。**誤差圏と大きな未達を同じ語で呼ばない。**
+    verdict = _re3.search(r'<p class="verdict">(.*?)</p>', board3, _re3.S).group(1)
+    gap_rate = (year["this_year"]["op"] / year["budget"] - 1) * 100
+    said_ok = "届く見通し" in verdict
+    said_ng = "届かない見通し" in verdict
+    check("年間の判定語が、実際の差と食い違っていない",
+          (said_ok and gap_rate >= 3) or (said_ng and gap_rate < -3)
+          or (not said_ok and not said_ng and abs(gap_rate) < 3),
+          "差 %+.1f%% ／ 語 %s" % (gap_rate, "届く" if said_ok else ("届かない" if said_ng else "ほぼ同じ")))
+
+    # 「残りが何%下ぶれたら届かないか」は、外れても嘘にならない言い方。数字が合っているかを見る。
+    hit = _re3.search(r"残り(\d+)ヶ月が見込みより<b>([\d.]+)%</b>下ぶれ", verdict)
+    check("下ぶれの余地が、実際の積み上げと合っている", bool(hit))
+    if hit:
+        ahead = [m for m in year["this_year"]["months"] if m["state"] != "確定"]
+        want = (year["this_year"]["op"] - year["budget"]) / sum(m["op"] for m in ahead) * 100
+        check("下ぶれ%の計算が合っている", abs(float(hit.group(2)) - abs(want)) < 0.05
+              and int(hit.group(1)) == len(ahead),
+              "画面 %s%% ／ 計算 %.1f%%（残り%dヶ月）" % (hit.group(2), abs(want), len(ahead)))
+
+    for svg in _re3.findall(r"<svg.*?</svg>", board3, _re3.S):
+        texts = []
+        for tag in _re3.findall(r"<text[^>]*>[^<]*</text>", svg):
+            x = _re3.search(r'x="([-\d.]+)"', tag)
+            y = _re3.search(r'y="([-\d.]+)"', tag)
+            size = _re3.search(r'font-size="([\d.]+)"', tag)
+            body = _re3.search(r">([^<]*)</text>", tag)
+            if not (x and y and body and body.group(1).strip()):
+                continue
+            texts.append((float(x.group(1)), float(y.group(1)),
+                          float(size.group(1)) if size else 12.0, body.group(1)))
+        for i in range(len(texts)):
+            for j in range(i + 1, len(texts)):
+                a, b = texts[i], texts[j]
+                if abs(a[0] - b[0]) > 10:            # 横に離れていれば重ならない
+                    continue
+                checked += 1
+                if abs(a[1] - b[1]) < max(a[2], b[2]) * 0.85:
+                    pairs.append((a[3], b[3], round(abs(a[1] - b[1]), 1)))
+    # 記号は、それが指す数字と同じ枠に置く。離れた列に置くと隣の数字と結びつけて読まれる
+    # ── 2026-09-01、▲が部門名の左にあり、すぐ右の予算比がマイナスという並びを画面で見つけた。
+    cells = _re3.findall(
+        r"<td><span[^>]*>([▲▼→])</span> <span[^>]*>([+-][\d.]+)%</span></td>", board3)
+    check("表の記号が、同じ枠の数字と食い違っていない", bool(cells) and all(
+        (a == "▲" and float(b) > 1) or (a == "▼" and float(b) < -1)
+        or (a == "→" and abs(float(b)) <= 1) for a, b in cells),
+        "%d箇所" % len(cells))
+    check("記号が何を指すか画面に書いてある", "▲▼は<b>前年比</b>の向き" in board3)
+
+    check("同じ位置に置いた文字が重なっていない", not pairs,
+          "%d組を検査／重なり %s" % (checked, pairs[:3] if pairs else "無し"))
+    check("重なりを検査できるだけの文字がある", checked >= 3, "%d組" % checked)
+
     return report()
+
+
 
 
 
@@ -1177,11 +1345,31 @@ def main():
     backup = store.read_bytes() if store.exists() else None
     store.unlink(missing_ok=True)
     try:
-        return _run(instance)
+        code = _run(instance)
     finally:
         store.unlink(missing_ok=True)
         if backup is not None:
             store.write_bytes(backup)
+
+    # **判定は自分が汚した成果物を片づける。**
+    # 検査中にサーバを叩くと、その時点のデータ（検査用の申し送りを含む）で
+    # 画面が組み直され、ディスクに焼き付く。DBから消しても画面には残る。
+    # 2026-09-01、作成者「検査用」の申し送りが出荷物に混ざっているのを画面で見つけた。
+    # 消すのも組み直すのも、検査で使ったのとは別の接続で行う
+    # ── 同じ接続だと、検査中の未確定の書き込みが見えたまま組み直してしまう。
+    clean = db.connect(instance)
+    try:
+        clean.execute("DELETE FROM records WHERE kind='申し送り' AND body LIKE '%検査用%'")
+        clean.commit()
+    finally:
+        clean.close()
+    import build_dashboard
+    html = build_dashboard.build(instance).read_text(encoding="utf-8")
+    dirt = [w for w in ("検査用", "くらうど") if w in html]
+    if dirt:
+        print("成果物に検査の跡が残りました: %s" % dirt)
+        return 1
+    return code
 
 
 if __name__ == "__main__":

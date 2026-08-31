@@ -24,7 +24,11 @@ import random
 
 OUT = pathlib.Path(__file__).resolve().parent / "incoming"
 
-START = datetime.date(2026, 6, 1)
+# 事業年度は4月始まり。**会社の損益は月ごとに確定し、それが年間へ積み上がる。**
+# 3ヶ月ぶんの飛び飛びのデータでは、年間の着地は原理的に出せない。
+FISCAL_START_MONTH = 4
+PREV_START = datetime.date(2025, 4, 1)    # 前期のはじめ（通年12ヶ月・確定済み）
+START = datetime.date(2026, 4, 1)         # 当期のはじめ
 END = datetime.date(2026, 8, 12)          # 販売管理・勤怠が出せている最終日（取り込みは必ず遅れる）
 MONTH_END = datetime.date(2026, 8, 31)    # 当月の末日。着地見込みはここまでを埋める
 YOY_OFFSET = 364               # 52週。曜日が揃うので前年同期の比較が素直になる
@@ -53,20 +57,46 @@ SGA_RATE = 0.022
 # 売上ベースの人時生産性と粗利ベースで順位が入れ替わるのは、この差のため。
 COST_RATE = {"1010": 0.920, "1020": 0.885, "1030": 0.865,
              "1040": 0.835, "1050": 0.870, "1060": 0.890, "1070": 0.800}
-# 農産部だけ、相場高で仕入値が上がったぶんを売価に転嫁しきれていない
-NOSAN_COST = {"2026-06": 0.865, "2026-07": 0.878, "2026-08": 0.888}
-# 会計は月次で締める。当月はまだ確定していないので出力されない。
+# 相場は月ごとに動く。農産は変動が大きく、加工食品はほぼ動かない ── 実際そうである。
+# 当期に入ってから農産の相場が上がり、売価転嫁が追いついていない、という設定。
+COST_DRIFT = {
+    "1030": {"2026-04": 0.000, "2026-05": 0.004, "2026-06": 0.010,
+             "2026-07": 0.018, "2026-08": 0.024},        # 農産：相場高が続く
+    "1040": {"2026-06": 0.006, "2026-07": 0.004, "2026-08": 0.002},   # 水産：やや高
+}
+# 会計は翌月10日ごろに締める。当月はまだ確定していないので出力されない。
 UNSETTLED = "2026-08"
 
 WEEKDAY = [1.10, 1.06, 1.00, 1.02, 1.09, 0.70]      # 月〜土。日曜は休み
-# 前年は当月末ぶんまで作るので、9月にわずかにはみ出す（2025-09-01）。その分も持たせる。
-SEASON = {
-    "1040": {6: 0.98, 7: 1.08, 8: 1.14, 9: 1.05},
-    "1060": {6: 0.97, 7: 1.12, 8: 1.18, 9: 1.04},
-    "1050": {6: 1.00, 7: 1.06, 8: 1.10, 9: 1.04},
-    "1030": {6: 1.02, 7: 1.00, 8: 0.96, 9: 1.02},
-}
-SEASON_DEFAULT = {6: 1.00, 7: 1.02, 8: 1.04, 9: 1.02}
+
+# 12ヶ月ぶんの季節。食品卸は年末（歳暮・normal需要）が山、2月が谷。
+# 辞書を12ヶ月ぶん手で書くと保守できないので、部門ごとの「効き方」を掛ける形にする。
+SEASON_BASE = {1: 0.88, 2: 0.86, 3: 1.00, 4: 0.97, 5: 0.98, 6: 1.00,
+               7: 1.06, 8: 1.02, 9: 1.00, 10: 1.03, 11: 1.06, 12: 1.28}
+# 季節の振れ方は部門で違う。1.0＝全社並み、大きいほど季節に振られる。
+SEASON_SWING = {"1010": 0.9, "1020": 1.0, "1030": 0.7,
+                "1040": 1.3, "1050": 1.2, "1060": 1.4, "1070": 0.8}
+# 夏に強い部門（水産・菓子飲料・畜産）。年末とは別の山。
+SUMMER = {"1040": {7: 1.06, 8: 1.10}, "1060": {7: 1.08, 8: 1.12},
+          "1050": {7: 1.05, 8: 1.07}}
+
+# 賞与。6月と12月に、月例人件費の1.0ヶ月分ずつ（年間で月例の2ヶ月分＝年収14ヶ月）。
+#
+# **損益と資金で、乗り方が違う。ここが実在の会社の姿。**
+#   損益 … 賞与引当金として毎月ならして積む（1年で2ヶ月分 ÷ 12 ＝ 毎月16.7%上乗せ）
+#   資金 … 支給月に現金がまとめて出る
+# 損益にそのまま乗せると賞与月が営業赤字になり、年間の着地が読めなくなる。
+# 実務が引当を積むのは、まさにそれを避けて月ごとに正しく着地を見るため。
+BONUS_MONTHS = (6, 12)
+BONUS_RATE = 1.0
+BONUS_ACCRUAL = BONUS_RATE * len(BONUS_MONTHS) / 12
+
+
+def season(code, day):
+    """その日の季節係数。全社の形に、部門ごとの振れ方を掛ける。"""
+    base = SEASON_BASE[day.month]
+    swung = 1.0 + (base - 1.0) * SEASON_SWING.get(code, 1.0)
+    return swung * SUMMER.get(code, {}).get(day.month, 1.0)
 
 
 def business_days(first, last):
@@ -92,22 +122,34 @@ def hours_event(code, day):
     return 1.0
 
 
-def build(pairs, current_year):
-    """pairs は (モデル用の日, 記録する日)。前年は当月末まで揃える ──
-    **前年が月末まで無いと、今年の着地見込みが立たない。**"""
-    rng = random.Random(20260813 if current_year else 20250813)
-    sales_rows, hours_rows = [], []
-    year_scale = 1.0 if current_year else 0.975
-    hour_scale = 1.0 if current_year else 1.01
+def fiscal_year(day):
+    """その日が属する事業年度（4月始まり）。3月決算なので4〜12月は当年、1〜3月は前年扱い。"""
+    return day.year if day.month >= FISCAL_START_MONTH else day.year - 1
 
-    for day, stamp in pairs:
+
+def build(days):
+    """**1本の連続した帳簿として作る。**
+
+    前期と当期を別々に作ると、3月末の在庫と4月の期首在庫が繋がらない。
+    実在の会社の帳簿は途切れない。だから期首から実績最終日まで、一続きで積む。
+    """
+    rng = random.Random(20260813)
+    sales_rows, hours_rows = [], []
+
+    for day in days:
+        stamp = day
+        current_year = fiscal_year(day) == fiscal_year(END)
+        # 前期は少し小さく、人時は少し多い（＝当期は成長し、効率も上がっている）
+        year_scale = 1.0 if current_year else 0.975
+        hour_scale = 1.0 if current_year else 1.01
         wd_s = WEEKDAY[day.weekday()]
         wd_h = 1 + (wd_s - 1) * 0.65          # 人員は売上ほど曜日に追随しない
 
         for code, name, org, base, target, level, _wage in SALES_DEPTS:
-            season = SEASON.get(code, SEASON_DEFAULT)[stamp.month]
-            sales = base * wd_s * season * level * year_scale * rng.gauss(1, 0.035)
-            hours = (base / target) * wd_h * (1 + (season - 1) * 0.7) * hour_scale * rng.gauss(1, 0.025)
+            factor = season(code, stamp)
+            sales = base * wd_s * factor * level * year_scale * rng.gauss(1, 0.035)
+            hours = ((base / target) * wd_h * (1 + (factor - 1) * 0.7)
+                     * hour_scale * rng.gauss(1, 0.025))
             if current_year:
                 sales *= sales_event(code, day)
                 hours *= hours_event(code, day)
@@ -125,12 +167,17 @@ def build(pairs, current_year):
 
 
 def cost_rate(code, month):
-    if code == "1030":
-        return NOSAN_COST.get(month, COST_RATE[code])
-    return round(COST_RATE[code] + random.Random(month + code).gauss(0, 0.004), 4)
+    """その月の原価率。基準率＋相場のブレ。
+
+    相場は月ごとに動く。農産のように変動の大きい部門と、
+    加工食品のようにほぼ動かない部門がある ── 実際そうである。
+    """
+    drift = COST_DRIFT.get(code, {}).get(month, 0.0)
+    return round(COST_RATE[code] + drift
+                 + random.Random(month + code).gauss(0, 0.003), 4)
 
 
-def write_accounting(rows, hours_rows, current_year):
+def write_accounting(rows, hours_rows):
     """会計は月次・千円単位・年月はタイトル行だけ。確定した月しか出さない。
 
     **全部門ぶん出す**（売上を持たない間接部門も、人件費と経費は発生する）。
@@ -161,7 +208,8 @@ def write_accounting(rows, hours_rows, current_year):
 
         def row(code, label, sales, cost, sga_fixed=None):
             hrs = by_org.get((month, org_of[code]), 0)
-            labor = int(hrs * wage_of[code])
+            # 損益側は引当。毎月ならして積む（支給月に跳ねさせない）。
+            labor = int(hrs * wage_of[code] * (1 + BONUS_ACCRUAL))
             sga = int(sga_fixed if sga_fixed is not None else sales * SGA_RATE)
             for i, v in enumerate((sales, cost, labor, sga)):
                 sums[i] += v
@@ -274,7 +322,7 @@ def buy_of(code, day, sales):
     return int(sales * cost_rate(code, day.strftime("%Y-%m")) * (0.94 + 0.12 * ((day.day % 7) / 6)))
 
 
-def write_stock(path, rows, issued):
+def write_stock(rows, years):
     """週次の在庫表。**会計ではなく販売管理から出る。**
 
     在庫は現場が数える ── 週に一度、各週の最終営業日に締めて金額を出す。
@@ -297,10 +345,18 @@ def write_stock(path, rows, issued):
 
     rnd = random.Random(20260701)
     state = dict(opening)
-    lines = ["■週次在庫表　出力日:%s" % issued.strftime("%Y/%m/%d"),
-             "部門コード,部門名,棚卸日,在庫金額（税抜）"]
+    # ファイルは年ごとに分けるが、**在庫の状態は年をまたいで続く。**
+    # 年ごとに期首へ戻すと、3月末と4月の在庫が繋がらず、原価率が壊れる。
+    out = {y: ["■週次在庫表　出力日:%s"
+               % min(END, datetime.date(y, 12, 31)).strftime("%Y/%m/%d"),
+               "部門コード,部門名,棚卸日,在庫金額（税抜）"] for y in years}
     written = 0
     days = sorted(by_day)
+    # 期首在庫。**開始の実測が無いと、最初の週の原価率（期首＋仕入−期末）が出せない。**
+    for code, name, _b, _c in sorted(by_day[days[0]]):
+        out[days[0].year].append(
+            "%s,%s,%s,%d" % (code, name, days[0].strftime("%Y/%m/%d"), int(state[code])))
+        written += 1
     for i, day in enumerate(days):
         for code, _name, buy, cost in by_day[day]:
             state[code] += buy - cost
@@ -313,9 +369,12 @@ def write_stock(path, rows, issued):
             continue
         for code, name, _b, _c in sorted(by_day[day]):
             state[code] *= 1.0 + rnd.uniform(-0.004, 0.004)      # 実地の棚卸差異
-            lines.append("%s,%s,%s,%d" % (code, name, day.strftime("%Y/%m/%d"), int(state[code])))
+            out[day.year].append(
+                "%s,%s,%s,%d" % (code, name, day.strftime("%Y/%m/%d"), int(state[code])))
             written += 1
-    path.write_bytes((CRLF.join(lines) + CRLF).encode("cp932"))
+    for year, lines in out.items():
+        (OUT / ("A社販売管理_週次在庫_%d.csv" % year)).write_bytes(
+            (CRLF.join(lines) + CRLF).encode("cp932"))
     return written
 
 
@@ -350,9 +409,12 @@ def write_balance(months, rows, hours_rows):
         hours_m[day.strftime("%Y-%m")][org] += hrs
 
     def labor_of(month):
+        """資金側の人件費。**出ていく現金なので、賞与は支給月にまとめて出る。**
+        損益側（引当でならす）とは別物。ここを揃えてしまうと、賞与月の資金繰りが消える。"""
+        bonus = BONUS_RATE if int(month[5:7]) in BONUS_MONTHS else 0.0
         total = 0
         for code in list(org_of):
-            total += int(hours_m.get(month, {}).get(org_of[code], 0.0) * wage_of[code])
+            total += int(hours_m.get(month, {}).get(org_of[code], 0.0) * wage_of[code] * (1 + bonus))
         return total
 
     def sga_of(month):
@@ -411,31 +473,38 @@ def write_purchase(path, rows, issued):
 
 def main():
     OUT.mkdir(exist_ok=True)
-    shift = datetime.timedelta(days=YOY_OFFSET)
-    current = [(d, d) for d in business_days(START, END)]
-    # 前年は当月末までぶんを用意する（今年の残り営業日の見込みを立てる材料になる）
-    prior = [(d, d - shift) for d in business_days(START, MONTH_END)]
+    # 前期の期首から、実績が届いている最終日まで **一続き** で作る。
+    # 年ごとに分けて作ると、3月末の在庫と4月の期首在庫が繋がらない。
+    all_days = business_days(PREV_START, END)
+    sales_all, hours_all = build(all_days)
+    years = sorted({d.year for d in all_days})
 
-    for current_year, pairs in ((True, current), (False, prior)):
-        suffix = "2026" if current_year else "2025"
-        issued = END + datetime.timedelta(days=1 if current_year else 1 - YOY_OFFSET)
-        sales_rows, hours_rows = build(pairs, current_year)
-        n1 = write_sales(OUT / ("A社販売管理_売上日報_%s.csv" % suffix), sales_rows, issued)
-        n2 = write_hours(OUT / ("B社勤怠_勤務実績_%s.csv" % suffix), hours_rows)
-        n3 = write_accounting(sales_rows, hours_rows, current_year)
-        n4 = write_purchase(OUT / ("A社販売管理_仕入日報_%s.csv" % suffix), sales_rows, issued)
-        months = sorted({d.strftime("%Y-%m") for _c, _n, d, _s, _x in sales_rows}
-                        - {UNSETTLED}
-                        - {m for m in {d.strftime("%Y-%m") for _c, _n, d, _s, _x in sales_rows}
-                           if len({d for _c, _n, d, _s, _x in sales_rows if d.strftime("%Y-%m") == m}) < 15})
-        n5 = write_trial(months)
-        n6 = write_balance(months, sales_rows, hours_rows)
-        n7 = write_stock(OUT / ("A社販売管理_週次在庫_%s.csv" % suffix), sales_rows, issued)
-        print("%s: 売上 %d行 ／ 勤怠 %d行 ／ 部門損益 %dヶ月 ／ 仕入 %d行 ／ 試算表 %dヶ月 ／ 月末残高 %dヶ月 ／ 週次在庫 %d行"
-              % (suffix, n1, n2, n3, n4, n5, n6, n7))
+    # 状態を持たないもの ── 年ごとにファイルを分ける（販売管理・勤怠はそう出す）
+    for year in years:
+        rows = [r for r in sales_all if r[2].year == year]
+        hrs = [r for r in hours_all if r[1].year == year]
+        issued = min(END, datetime.date(year, 12, 31)) + datetime.timedelta(days=1)
+        n1 = write_sales(OUT / ("A社販売管理_売上日報_%d.csv" % year), rows, issued)
+        n2 = write_hours(OUT / ("B社勤怠_勤務実績_%d.csv" % year), hrs)
+        n4 = write_purchase(OUT / ("A社販売管理_仕入日報_%d.csv" % year), rows, issued)
+        print("  %d年: 売上 %d行 ／ 勤怠 %d行 ／ 仕入 %d行" % (year, n1, n2, n4))
 
-    print("当年 %d営業日（%s 〜 %s）／ 前年は当月末ぶんまで %d営業日" 
-          % (len(current), current[0][1], current[-1][1], len(prior)))
+    # 会計が締めた月だけ。営業日が15日に満たない端の月は締めない。
+    by_month = {}
+    for _c, _n, day, _s, _x in sales_all:
+        by_month.setdefault(day.strftime("%Y-%m"), set()).add(day)
+    months = sorted(m for m, days in by_month.items()
+                    if m != UNSETTLED and len(days) >= 15)
+
+    # 状態が続くもの ── 全期間をまとめて渡す
+    n3 = write_accounting(sales_all, hours_all)
+    n5 = write_trial(months)
+    n6 = write_balance(months, sales_all, hours_all)
+    n7 = write_stock(sales_all, years)
+    print("  会計: 部門損益 %dヶ月 ／ 試算表 %dヶ月 ／ 月末残高 %dヶ月 ／ 週次在庫 %d行"
+          % (n3, n5, n6, n7))
+    print("  期間: %s 〜 %s（%d営業日）／ 締まった月 %dヶ月 ／ 当月 %s"
+          % (all_days[0], all_days[-1], len(all_days), len(months), UNSETTLED))
 
 
 if __name__ == "__main__":
