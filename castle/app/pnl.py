@@ -104,40 +104,51 @@ def load_stock(conn):
 
 
 def daily_stock(conn, cfg, days=None, window=None):
-    """日次の在庫。**週次までが実データ、そのあいだは置いた値。**
+    """日次の在庫。**週次までが実データ、そのあいだは積み上げ。**
 
-    置き方は着地見込みと同じ考え方 ── 予測モデルは使わない。
-    直近の実データから **在庫日数（在庫 ÷ 日商原価）** を取り、その日数を、
-    その日の日商原価に当てる。
+    在庫は、買った分だけ増えて、売った分だけ減る。だからそのまま積む ──
 
-    **金額を日割りしない。率（日数）を運ぶ。**
-    月次の原価率を日次売上に当てるのと、まったく同じ形である。
-    仕入を足して原価を引く積み上げにしないのは、廃棄も棚卸差異も拾えず、
-    週をまたぐほど実データから離れていくため。在庫日数なら、実データに繋ぎ直せる。
+        在庫(t) = 直近に数えた在庫 ＋ Σ仕入 − Σ売上原価
+
+    **毎週の棚卸で実データに置き直す**ので、廃棄や棚卸差異のズレは積み上がらない。
+
+    はじめは「在庫日数を当てる」置き方にしていた（在庫日数 × 日商原価）。
+    率を運ぶという点では原価率の扱いと揃っていたが、**外れが大きかった**。
+    在庫日数は一定ではなく、日商原価が動くと、動いていない在庫まで動いて見える。
+    実測（次の棚卸日での外れ）── 在庫日数を当てる 平均1.44%（最大4.7%＝5,900万円）、
+    積み上げ 平均0.11%。**13倍ちがったので、積み上げに変えた。**
+
+    日商原価は在庫日数の表示にだけ使う。窓は週の営業日数（ずれると脈を打つ）。
     """
     if days is None:
         days = build(conn, cfg)["days"]
     stock = load_stock(conn)
     rows = sorted(days, key=lambda d: d["date"])
-    # 窓は週の営業日数。ずれると曜日の谷が窓に出入りして、在庫が動いたように見える。
     if window is None:
         window = len(business_weekdays([r["date"] for r in rows])) or 6
 
     costs, out = [], {}
-    held = None                      # 直近の実データから取った在庫日数
+    anchor_at, anchor, moved = None, None, 0.0
+    buys = load_purchase(conn)
     for row in rows:
-        costs.append(row["sales"] - row["gross"])
+        day = row["date"]
+        cost = row["sales"] - row["gross"]
+        costs.append(cost)
         if len(costs) < window:
-            continue                       # 窓が満ちるまでは置かない
+            continue
         daily_cost = sum(costs[-window:]) / window
-        if row["date"] in stock:
-            amount = stock[row["date"]]
-            held = (amount / daily_cost) if daily_cost else held
-            out[row["date"]] = {"amount": amount, "settled": True,
-                                "days_of_stock": held, "daily_cost": daily_cost}
-        elif held is not None:
-            out[row["date"]] = {"amount": held * daily_cost, "settled": False,
-                                "days_of_stock": held, "daily_cost": daily_cost}
+
+        if day in stock:
+            anchor_at, anchor, moved = day, stock[day], 0.0
+            amount, settled = anchor, True
+        elif anchor is None:
+            continue
+        else:
+            moved += buys.get(day, 0.0) - cost
+            amount, settled = anchor + moved, False
+        out[day] = {"amount": amount, "settled": settled, "from": anchor_at,
+                    "moved": 0.0 if settled else moved, "daily_cost": daily_cost,
+                    "days_of_stock": (amount / daily_cost) if daily_cost else None}
     return out
 
 

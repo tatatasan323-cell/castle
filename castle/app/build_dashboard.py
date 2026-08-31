@@ -561,13 +561,8 @@ def build(instance, verbose=False, nav=False, scope=None):
             ladder=screen.ladder(book),
             cash=screen.cash(book),
             purchase=screen.purchase(book) + screen.stock(book),
-            # 前年の日付まで1本の線に繋ぐと、年をまたいだ折れ線になって傾向が読めない。
-            buychart=screen.series_chart(
-                chart_days,
-                [("仕入（%s）" % SMOOTH_LABEL,
-                  screen.moving_average([buy_by_day.get(d) for d in chart_days]))],
-                lambda v: "%.2f億" % (v / 1e8), "c-buy") if book["cash"] else "",
-            # 仕入（日に約1.3億）と在庫（約12億）を同じ軸に載せると、仕入が潰れる。
+            # 仕入の線は外した。金額は上のカードに出ているうえ、
+            # 在庫を積み上げで置くようにしたので、仕入の線は在庫の線の微分になる。
             stockchart=screen.series_chart(
                 chart_days,
                 [("在庫（週次の実データ）",
@@ -632,7 +627,7 @@ def build(instance, verbose=False, nav=False, scope=None):
                    "vs_yoy": r["vs_yoy"], "trend": r["trend"]}
             for name, r in results.items()},
         "trend_cards": trend_cards,
-        "buy_chart_range": [chart_days[0], chart_days[-1]] if chart_days else None,
+        "stock_chart_range": [chart_days[0], chart_days[-1]] if chart_days else None,
         "stock_view": _stock_view(book),
         "ladder": book["ladder"]["steps"],
         "depreciation": book["ladder"]["depreciation"],

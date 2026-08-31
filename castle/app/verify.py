@@ -727,8 +727,8 @@ def _run(instance):
           "実績 %.0f ／ 着地 %.0f" % (buy.get("actual", 0), buy.get("forecast", 0)))
     check("仕入が画面に出ている", "仕入" in board)
     check("残高が確定月のものだと画面に明記されている", "月末時点" in board)
-    rng = book.get("buy_chart_range") or []
-    check("仕入の推移が年をまたいでいない", len(rng) == 2 and rng[0][:4] == rng[1][:4],
+    rng = book.get("stock_chart_range") or []
+    check("在庫の推移が年をまたいでいない", len(rng) == 2 and rng[0][:4] == rng[1][:4],
           "→".join(rng))
 
     print("")
@@ -1010,7 +1010,7 @@ def _run(instance):
           conn.execute("SELECT COUNT(*) FROM records WHERE id > ?", (mark,)).fetchone()[0] == 0)
 
     print("")
-    print("【21】在庫 ── 週次で実、あいだは在庫日数で置く")
+    print("【21】在庫 ── 週次で実、あいだは積み上げ")
     # 表示が壊れていないことと、数字が互いに整合していることは別。
     # 在庫を流れと別々に作れば、CCCも運転資本も「それらしいだけの数字」になる。
     ledger = pnl.build(conn, cfg)
@@ -1056,11 +1056,26 @@ def _run(instance):
 
     # 置いた日は「在庫日数 × 日商原価」── 金額を日割りしていない
     guessed = [d for d in sorted(daily) if not daily[d]["settled"]]
-    check("置いた日には、根拠の在庫日数が付いている",
-          all(daily[d].get("days_of_stock") for d in guessed))
-    check("置いた値が、日商原価に連動している",
-          all(abs(daily[d]["amount"]
-                  - daily[d]["days_of_stock"] * daily[d]["daily_cost"]) < 1.0 for d in guessed))
+    check("置いた日には、根拠（前の実データからの積み上げ）が付いている",
+          all(daily[d].get("from") and daily[d].get("moved") is not None for d in guessed))
+
+    # いちばん大事な性質 ── 置いた値が、次の実データにちゃんと着地するか。
+    # 在庫日数を当てる置き方は平均1.44%外し、7月の週は+4.7%（5,900万円）外していた。
+    landed = []
+    for before, now in zip(stamps, stamps[1:]):
+        if (datetime.date.fromisoformat(now) - datetime.date.fromisoformat(before)).days > 60:
+            continue
+        prev_day = max((d for d in daily if d < now), default=None)
+        if prev_day is None or prev_day not in daily:
+            continue
+        landed.append(abs(daily[prev_day]["amount"] - stock[now]) / stock[now] * 100)
+    # 線は 0.8%。実地棚卸は必ずズレるので、そこは誰にも当てられない
+    # （このデモは ±0.4% の棚卸差異を意図的に入れてある）。
+    # 在庫日数を当てる置き方は平均1.44%・最大4.7%で、この線を大きく超えていた。
+    check("置いた値が、次の実データに着地する（0.8%以内）",
+          landed and max(landed) < 0.8,
+          "いちばん外した週で %.2f%%（棚卸差異ぶんは誰にも当てられない）"
+          % (max(landed) if landed else 0))
 
     # 推定を、確定の顔をして混ぜない
     cash = ledger["cash"]
