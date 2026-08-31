@@ -103,7 +103,7 @@ def load_stock(conn):
     return out
 
 
-def daily_stock(conn, cfg, days=None, window=7):
+def daily_stock(conn, cfg, days=None, window=None):
     """日次の在庫。**週次までが実データ、そのあいだは置いた値。**
 
     置き方は着地見込みと同じ考え方 ── 予測モデルは使わない。
@@ -119,12 +119,17 @@ def daily_stock(conn, cfg, days=None, window=7):
         days = build(conn, cfg)["days"]
     stock = load_stock(conn)
     rows = sorted(days, key=lambda d: d["date"])
+    # 窓は週の営業日数。ずれると曜日の谷が窓に出入りして、在庫が動いたように見える。
+    if window is None:
+        window = len(business_weekdays([r["date"] for r in rows])) or 6
 
     costs, out = [], {}
     held = None                      # 直近の実データから取った在庫日数
     for row in rows:
         costs.append(row["sales"] - row["gross"])
-        daily_cost = sum(costs[-window:]) / len(costs[-window:])
+        if len(costs) < window:
+            continue                       # 窓が満ちるまでは置かない
+        daily_cost = sum(costs[-window:]) / window
         if row["date"] in stock:
             amount = stock[row["date"]]
             held = (amount / daily_cost) if daily_cost else held

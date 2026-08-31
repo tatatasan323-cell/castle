@@ -33,6 +33,9 @@ THEME = db.ROOT / "castle" / "templates" / "theme.css"
 # 全社の節と推移の節は別ファイル。部門を絞ったら、節ごと出さない／別の版を出す。
 # 条件分岐をmarkupに書かず、見せるものが違うなら別のテンプレートにする。
 PART = db.ROOT / "castle" / "templates"
+# 凡例の日数と、実際の窓を1か所から出す。別々に書くと必ず食い違う。
+SMOOTH_WINDOW = 6
+SMOOTH_LABEL = "週ぶん（%d営業日）の移動平均" % SMOOTH_WINDOW
 
 # サーバ配信のときだけ出す。単体ファイルとして配ったときにリンク切れを作らないため。
 NAV = ('<nav><b>経営ステータス</b>'
@@ -561,7 +564,7 @@ def build(instance, verbose=False, nav=False, scope=None):
             # 前年の日付まで1本の線に繋ぐと、年をまたいだ折れ線になって傾向が読めない。
             buychart=screen.series_chart(
                 chart_days,
-                [("仕入（7営業日移動平均）",
+                [("仕入（%s）" % SMOOTH_LABEL,
                   screen.moving_average([buy_by_day.get(d) for d in chart_days]))],
                 lambda v: "%.2f億" % (v / 1e8), "c-buy") if book["cash"] else "",
             # 仕入（日に約1.3億）と在庫（約12億）を同じ軸に載せると、仕入が潰れる。
@@ -632,6 +635,7 @@ def build(instance, verbose=False, nav=False, scope=None):
         "buy_chart_range": [chart_days[0], chart_days[-1]] if chart_days else None,
         "stock_view": _stock_view(book),
         "ladder": book["ladder"]["steps"],
+        "depreciation": book["ladder"]["depreciation"],
         "cash": ({k: v for k, v in book["cash"].items() if k != "purchase"}
                  | {"purchase": {k: v for k, v in book["cash"]["purchase"].items()
                                  if k != "series"}}) if book["cash"] else None,

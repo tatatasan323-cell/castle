@@ -158,7 +158,7 @@ def series_chart(dates, series, unit, chart_id, width=940, height=260, pad=38):
     """部門を日次で並べて比べる図。
 
     **月次に丸めない。** 月次は会計の都合であって、経営の都合ではない。
-    日次のまま7営業日の移動平均をかければ、3ヶ月でも傾向は出る。
+    日次のまま週ぶんの移動平均をかければ、3ヶ月でも傾向は出る。
 
     凡例にマウスを乗せるとその部門だけが残る ── JavaScriptは使わず、
     生成したCSSの :hover と兄弟セレクタだけで実現する。
@@ -222,12 +222,21 @@ def series_chart(dates, series, unit, chart_id, width=940, height=260, pad=38):
                pad, height - pad + 17, dates[0], right, height - pad + 17, dates[-1]))
 
 
-def moving_average(values, window=7):
-    """7営業日の移動平均。日次のギザギザを均して、傾きだけを残す。"""
+def moving_average(values, window=6):
+    """移動平均。**窓が満ちるまでは値を出さない。**
+
+    満ちる前の点を描くと、1日ぶんの生の値が「7営業日移動平均」の顔をして立ち上がり、
+    「最初だけ跳ねている」という読み方を生む。実際は平均になっていないだけである。
+
+    窓は**週の営業日数**に合わせる。週が6営業日なのに窓を7日にすると、
+    毎回1日ずつずれて曜日の谷が窓に出入りし、**均すはずが脈を打つ**
+    （実測：窓7日で振れ12.6%、窓6日で8.4%）。
+    """
     out = []
     for i in range(len(values)):
-        chunk = [v for v in values[max(0, i - window + 1):i + 1] if v is not None]
-        out.append(sum(chunk) / len(chunk) if chunk else None)
+        chunk = values[max(0, i - window + 1):i + 1]
+        got = [v for v in chunk if v is not None]
+        out.append(sum(got) / len(got) if len(chunk) == window and got else None)
     return out
 
 

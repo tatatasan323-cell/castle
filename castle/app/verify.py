@@ -1073,7 +1073,66 @@ def _run(instance):
     check("どこまでが実で、どこからが置いた値かが画面に書いてある",
           "在庫日数" in board and "週次" in board)
 
+    print("")
+    print("【22】均した線が、本当に均されているか")
+    # 「7営業日移動平均」と名乗る線がギザギザなら、その名前が嘘になる。
+    ledger2 = pnl.build(conn, cfg)
+    week = len(pnl.business_weekdays([d["date"] for d in ledger2["days"]]))
+    check("週の営業日数を数えられる", 5 <= week <= 7, "%d日" % week)
+
+    buy = pnl.load_purchase(conn)
+    span = [d["date"] for d in ledger2["days"] if d["date"] >= "2026-06-01"]
+    raw = [buy.get(d, 0.0) for d in span]
+    smooth = screen.moving_average(raw, week)
+
+    # 窓が満ちるまでは値を出さない。1日ぶんの生の値を「移動平均」として描かない。
+    check("窓が満ちるまでは値を出さない",
+          all(v is None for v in smooth[:week - 1]) and smooth[week - 1] is not None,
+          "先頭 %s" % smooth[:week])
+
+    def jitter(values):
+        """隣り合う日の変化率。**幅ではなくギザギザそのもの**を測る。
+
+        幅（最大−最小）では、期間中の本当の伸びまで数えてしまい、
+        「均せているか」を判定できない。
+        """
+        got = [v for v in values if v is not None]
+        diffs = [abs(b - a) / a * 100 for a, b in zip(got, got[1:]) if a]
+        return sum(diffs) / len(diffs) if diffs else 0.0
+
+    check("均したあとがギザギザでない（日々の変化1%未満）", jitter(smooth) < 1.0,
+          "生 %.2f%% → 均した後 %.2f%%（窓が週の長さとずれると脈を打つ）"
+          % (jitter(raw), jitter(smooth)))
+    check("窓が週の営業日数と合っている",
+          jitter(smooth) < jitter(screen.moving_average(raw, week + 1)),
+          "窓%d日 %.2f%% ／ 窓%d日 %.2f%%"
+          % (week, jitter(smooth), week + 1, jitter(screen.moving_average(raw, week + 1))))
+
+    # 在庫の推定は、週の中で大きく上下しない（動いているのは在庫ではなく割る側）
+    stock_daily = pnl.daily_stock(conn, cfg, ledger2["days"])
+    weeks = {}
+    for day in sorted(stock_daily):
+        if day < "2026-06-15":
+            continue
+        key = datetime.date.fromisoformat(day).isocalendar()[:2]
+        weeks.setdefault(key, []).append(stock_daily[day]["amount"])
+    def span(values):
+        return (max(values) - min(values)) / (sum(values) / len(values)) * 100
+
+    worst = max((span(v), k) for k, v in weeks.items() if len(v) >= 4)
+    # 凡例に書いてある日数と、実際に使った窓が違えば、数字が合っていても嘘になる。
+    board2 = (instance / "out" / "dashboard.html").read_text(encoding="utf-8")
+    import re as _re
+    said = {int(m) for m in _re.findall(r"(\d+)営業日）の移動平均", board2)}
+    said |= {int(m) for m in _re.findall(r"(\d+)営業日の移動平均", board2)}
+    check("凡例に書いた日数と、実際の窓が一致している", said == {week} or not said,
+          "凡例=%s ／ 実際=%d日" % (sorted(said) or "記載なし", week))
+
+    check("在庫の推定が、週の中で暴れない", worst[0] < 4.0,
+          "いちばん振れた週で %.1f%%（在庫ではなく、割る側の日商原価が動いている）" % worst[0])
+
     return report()
+
 
 
 
