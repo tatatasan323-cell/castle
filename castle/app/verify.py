@@ -12,6 +12,7 @@ instance/data.db を作り直し、CSVを全部取り込み、ダッシュボー
 import datetime
 import json
 import re
+import os
 import pathlib
 import subprocess
 import sqlite3
@@ -45,6 +46,16 @@ def check(name, ok, detail="", why=""):
     return ok
 
 
+def run_shell(command):
+    proc = subprocess.run(command, shell=True, capture_output=True)
+    return proc.returncode, (proc.stdout or b'').decode('utf-8', 'replace')
+
+
+def shutil_rmtree(path):
+    import shutil
+    shutil.rmtree(path, ignore_errors=True)
+
+
 def run(*args):
     proc = subprocess.run([PY, *args], capture_output=True, text=True, encoding="utf-8", errors="replace")
     return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
@@ -64,22 +75,31 @@ def _run(instance):
             "data.db を作り直せません。serve.py が動いていませんか？\n"
             "  サーバを止めてから、もう一度 verify.py を実行してください。")
 
-    # サイロが増えたぶんだけ具体的に指す。A社*.csv では売上と仕入を取り違える。
-    steps = [
-        ("売上", sorted(incoming.glob("A社*売上*.csv"))),
-        ("仕入", sorted(incoming.glob("A社*仕入*.csv"))),
-        ("在庫", sorted(incoming.glob("A社*週次在庫*.csv"))),
-        ("労働時間", sorted(incoming.glob("B社*.csv"))),
-        ("部門損益", sorted(incoming.glob("C社*部門別損益*.csv"))),
-        ("試算表", sorted(incoming.glob("C社*試算表*.csv"))),
-        ("残高", sorted(incoming.glob("C社*月末残高*.csv"))),
-    ]
-    for kind, files in steps:
-        if not files:
-            check("%s のCSVが存在する" % kind, False, "instance/incoming に見つからない")
-            continue
-        code, out = run(APP / "import_csv.py", "--kind", kind, *[str(f) for f in files])
-        check("%s を取り込める（%d本）" % (kind, len(files)), code == 0, "" if code == 0 else out.strip().splitlines()[-1][:120])
+    # **作り直しも、本番と同じ自動の道を通す。** 種別を判定者が指定して取り込むと、
+    # 「人が選べば動く」ことしか確かめられない。見張りが選べることを、ここで見る。
+    # 見張りは取り込んだファイルを退避するので、CSVは毎回作り直してから渡す。
+    code, out = run(instance / "make_sample.py")
+    check("サイロのCSVを作り直せる", code == 0,
+          "" if code == 0 else out.strip().splitlines()[-1][:120])
+    for folder in ("取込済", "保留"):
+        shutil_rmtree(incoming / folder)
+
+    code, out = run(APP / "intake.py", "--no-build")
+    check("見張りが置き場を一巡して取り込む", code == 0,
+          out.strip().splitlines()[0][:150] if out.strip() else "")
+    check("置き場が空になる（取り込んだものは退避される）",
+          not list(incoming.glob("*.csv")),
+          "残り %d本" % len(list(incoming.glob("*.csv"))))
+    check("退避先に全部そろっている",
+          len(list((incoming / "取込済").rglob("*.csv"))) >= 50,
+          "%d本" % len(list((incoming / "取込済").rglob("*.csv"))))
+    check("保留は出ていない", not list((incoming / "保留").glob("*")),
+          "保留 %s" % [p.name for p in (incoming / "保留").glob("*")][:3])
+
+    kinds = {r[0] for r in sqlite3.connect(instance / "data.db").execute(
+        "SELECT DISTINCT kind FROM records")}
+    for kind in ("売上", "仕入", "在庫", "労働時間", "部門損益", "試算表", "残高"):
+        check("%s が骨に入っている" % kind, kind in kinds)
 
     # 申し送りと知識はCSVから来ない。だがデモの一部なので、作り直しに含める。
     # 「数字と現場の一行が同じ画面に並ぶ」が城の目的地であり、
@@ -275,7 +295,12 @@ def _run(instance):
             with opener.open(urllib.request.Request(base2 + "/login", data=ok_form), timeout=10) as res:
                 check("正しいキーでログインできる", res.status == 200, "HTTP %d" % res.status)
             cookies = {c.name: c for c in jar}
-            biscuit = cookies.get("castle_key")
+            biscuit = cookies.get("castle_session")
+            check("クッキーに鍵の文字列そのものが載っていない",
+                  biscuit is not None and token not in biscuit.value,
+                  "載っている" if biscuit and token in biscuit.value else "署名付きのセッション")
+            check("クッキーの値がASCIIである（日本語の名前でも壊れない）",
+                  biscuit is not None and biscuit.value.isascii())
             check("Cookie に HttpOnly と SameSite が付いている",
                   biscuit is not None
                   and biscuit.has_nonstandard_attr("HttpOnly")
@@ -1311,6 +1336,474 @@ def _run(instance):
     check("同じ位置に置いた文字が重なっていない", not pairs,
           "%d組を検査／重なり %s" % (checked, pairs[:3] if pairs else "無し"))
     check("重なりを検査できるだけの文字がある", checked >= 3, "%d組" % checked)
+
+    print("")
+    print("【26】取り込みの自動化 ── 誰も種別を選ばない")
+    # 「CSVを落とす作業が消えた」と言うなら、種別を人が選ばずに取り込めなければならない。
+    # **判定は自分の置き場を握る。** 本番の incoming を汚さない。
+    import shutil
+
+    import intake
+
+    # **判定は本番のDBを触らない。** 取り込みは同じ自然キーを上書きするので、
+    # 後片付けでバッチを消すと、元から入っていた本物の記録まで道連れになる
+    # ── 2026-09-01、2026年の売上と仕入を実際に消してしまった。専用の一式を作る。
+    before26 = conn.execute("SELECT COUNT(*) FROM records").fetchone()[0]
+    sandbox = instance.parent / "検査用インスタンス"
+    shutil.rmtree(sandbox, ignore_errors=True)
+    (sandbox / "incoming").mkdir(parents=True)
+    shutil.copy(instance / "config.json", sandbox / "config.json")
+    lab = sandbox / "incoming"
+    box = db.connect(sandbox)
+    # 【1】で見張りが退避したので、置き場ではなく退避先から取る
+    found = sorted((instance / "incoming" / "取込済").rglob("A社販売管理_売上日報_2026*.csv"))
+    check("試すための元ファイルがある", bool(found), "%d本" % len(found))
+    src = found[0]
+    shutil.copy(src, lab / src.name)
+
+    check("ファイル名から種別が決まる", intake.classify(cfg, src.name) == "売上",
+          str(intake.classify(cfg, src.name)))
+    # 規約に無い名前を推測で取り込むと、間違った種別のまま骨に入る。**推測しない。**
+    for bad in ("売上.csv", "A社_なにか_2026.csv", "C社会計_請求書_202608.csv"):
+        check("規約に無い「%s」を推測で取り込まない" % bad, intake.classify(cfg, bad) is None)
+
+    got = intake.run(box, cfg, lab)
+    box.commit()
+    check("置き場を一巡して取り込める", len(got["taken"]) == 1 and not got["held"],
+          "取り込み %d本 ／ 保留 %d本" % (len(got["taken"]), len(got["held"])))
+    check("取り込んだファイルは置き場から消える（退避される）",
+          not list(lab.glob("*.csv")) and list((lab / "取込済").rglob("*.csv")),
+          "置き場の残り %d本" % len(list(lab.glob("*.csv"))))
+
+    # 同じ中身をもう一度置いても、二度は数えない（ベンダーの再送は普通に起きる）
+    shutil.copy(src, lab / src.name)
+    again = intake.run(box, cfg, lab)
+    box.commit()
+    check("同じ中身を二度取り込まない", not again["taken"] and len(again["same"]) == 1,
+          "取り込み %d本 ／ 同一 %d本" % (len(again["taken"]), len(again["same"])))
+
+    # 中身が変わっていれば取り込む。**名前で判断すると、訂正版の再送を取りこぼす。**
+    (lab / src.name).write_bytes(
+        src.read_bytes() + "1010,加工食品部,2026/08/12,1,1\r\n".encode("cp932"))
+    fixed = intake.run(box, cfg, lab)
+    box.commit()
+    check("同じ名前でも中身が変われば取り込む", len(fixed["taken"]) == 1,
+          "取り込み %d本" % len(fixed["taken"]))
+
+    # 1本が壊れていても、他は進める（1本の不良で全部止めない）
+    (lab / "A社販売管理_売上日報_9999.csv").write_bytes("壊れた中身".encode("cp932"))
+    shutil.copy(sorted((instance / "incoming" / "取込済").rglob(
+        "A社販売管理_仕入日報_2026*.csv"))[0], lab)
+    (lab / "得体の知れないもの.csv").write_bytes("なにか".encode("cp932"))
+    mixed = intake.run(box, cfg, lab)
+    box.commit()
+    check("壊れた1本があっても、他は取り込む", len(mixed["taken"]) >= 1,
+          "取り込み %d本 ／ 保留 %d本" % (len(mixed["taken"]), len(mixed["held"])))
+    check("壊れたものは保留に退ける", any("9999" in n for n, _r in mixed["held"]),
+          "保留: %s" % [n for n, _r in mixed["held"]])
+    check("規約に無い名前も保留に退ける（黙って捨てない）",
+          any("得体の知れないもの" in n for n in mixed["unknown"]), str(mixed["unknown"]))
+    check("保留したものは、保留の置き場に残る",
+          len(list((lab / "保留").glob("*.csv"))) == 2,
+          "%d本" % len(list((lab / "保留").glob("*.csv"))))
+
+    # 失敗したことが、呼んだ側に伝わるか（タスクスケジューラが気づけるか）
+    check("保留があれば終了コードが0にならない", intake.exit_code(mixed) != 0,
+          "終了コード %d" % intake.exit_code(mixed))
+    none_at_all = {"taken": [], "same": [], "held": [], "unknown": []}
+    check("全部うまくいけば終了コードは0",
+          intake.exit_code(dict(none_at_all, taken=["x"])) == 0)
+    check("何も来ていなくても、来たことにしない", "0本" in intake.summary(none_at_all),
+          intake.summary(none_at_all))
+
+    made = box.execute(
+        "SELECT id FROM import_log WHERE note LIKE '%見張り%'").fetchall()
+    check("台帳に、見張りが入れたものとして残る", len(made) >= 3, "%d件" % len(made))
+    check("本番のDBは1件も動いていない",
+          conn.execute("SELECT COUNT(*) FROM records").fetchone()[0] == before26,
+          "%d件 → %d件"
+          % (before26, conn.execute("SELECT COUNT(*) FROM records").fetchone()[0]))
+    box.close()
+    shutil.rmtree(sandbox, ignore_errors=True)
+    check("検査用の一式を片付けた", not sandbox.exists())
+
+
+    # 決まった時刻に走らせる口。**動かして、ログが読めることまで見る。**
+    # 2026-09-01、2つ踏んだ ── 日本語名の .bat が呼び出し側から見つからないこと、
+    # ログに python（UTF-8）と echo（CP932）が混ざって、どちらでも読めなくなること。
+    launcher = instance.parent / "intake.bat"
+    check("決まった時刻に走らせる口がある", launcher.exists(), launcher.name)
+    check("名前がASCIIである（呼び出し側の文字コードに左右されない）",
+          launcher.name.isascii(), launcher.name)
+    raw = launcher.read_bytes()
+    # cmd はバッチファイルをOEMの文字コードで読む。UTF-8で保存すると日本語コメントが
+    # 化け、その断片をコマンドとして実行しようとして落ちる
+    # ── 2026-09-01、実際に踏んだ（chcp を先に書いても、ファイルの読み方には間に合わない）。
+    try:
+        raw.decode("cp932")
+        cp932_ok = True
+    except UnicodeDecodeError:
+        cp932_ok = False
+    check("バッチ本体がCP932で保存されている（cmdが読める形）", cp932_ok)
+    text = raw.decode("cp932", "replace")
+    check("多段の起動チェーンになっていない（pythonを直接呼ぶ）",
+          "python " in text and not any(w in text for w in ("wscript", "cscript", ".vbs")))
+    check("pythonの出力をUTF-8に固定している", "PYTHONIOENCODING" in text)
+    # ログに日本語をechoすると、python（UTF-8）と echo（CP932）が混ざって読めなくなる
+    echoed = [ln for ln in text.splitlines()
+              if "echo" in ln and not ln.strip().startswith("rem")]
+    check("ログへ書く行がASCIIだけになっている", all(ln.isascii() for ln in echoed),
+          "／".join(ln.strip()[:40] for ln in echoed if not ln.isascii()) or "全部ASCII")
+    check("終了コードを呼んだ側へ返している", "exit /b %CODE%" in text)
+    check("終了コードがリダイレクトに食われない書き方になっている",
+          '>> "instance' + chr(92) + 'intake.log" echo' in text)
+
+    if os.name == "nt":
+        log = instance / "intake.log"
+        log.unlink(missing_ok=True)
+        code, _out = run_shell(str(launcher))
+        check("実際に走って、終了コードを返す", code == 0, "終了コード %d" % code)
+        check("ログができる", log.exists())
+        if log.exists():
+            try:
+                body = log.read_bytes().decode("utf-8")
+                readable = True
+            except UnicodeDecodeError:
+                body, readable = "", False
+            check("ログが1つの文字コードで読める（UTF-8）", readable)
+            check("ログに終了コードが数字まで残る",
+                  bool(_re3.search("exit=" + chr(92) + "d", body)),
+                  body.strip().splitlines()[-1][:60] if body.strip() else "空")
+            log.unlink(missing_ok=True)
+
+
+
+
+    print("")
+    print("【31】Googleで入る ── 送り出して、戻りを検算する")
+    # **部品があることと、動くことは別。** 実際にHTTPで往復させて、入れることまで見る。
+    # 実テナントは無いので、判定の中に発行者を立てる（Google本番との疎通は別途）。
+    import http.server as _hs
+    import socketserver as _ss
+    import threading as _th
+
+    import oidc
+
+    idp2 = oidc.TestIssuer(issuer="https://accounts.example.test",
+                           audience="castle.apps.example.test")
+    issued = {}
+
+    class _Idp(_hs.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _json(self, body, code=200):
+            raw = json.dumps(body).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def do_GET(self):
+            self._json(idp2.jwks())
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            form = urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8"))
+            code = form.get("code", [""])[0]
+            if code not in issued:
+                return self._json({"error": "invalid_grant"}, 400)
+            self._json({"id_token": issued[code], "token_type": "Bearer"})
+
+    idp_server = _ss.TCPServer(("127.0.0.1", 0), _Idp)
+    idp_port = idp_server.server_address[1]
+    _th.Thread(target=idp_server.serve_forever, daemon=True).start()
+
+    conf = instance / "config.json"
+    keep_conf = conf.read_bytes()
+    keep_users = (instance / "users.json").read_bytes() if (instance / "users.json").exists() else None
+    secret_file = instance / "google_client_secret.txt"
+    try:
+        raw_cfg = json.loads(keep_conf.decode("utf-8"))
+        raw_cfg["auth"] = dict(raw_cfg.get("auth", {}), **{
+            "client_id": "castle.apps.example.test",
+            "domain": "example-foods.co.jp",
+            "issuer": idp2.issuer,
+            "auth_endpoint": "http://127.0.0.1:%d/authorize" % idp_port,
+            "token_endpoint": "http://127.0.0.1:%d/token" % idp_port,
+            "jwks_uri": "http://127.0.0.1:%d/certs" % idp_port,
+        })
+        conf.write_text(json.dumps(raw_cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+        secret_file.write_text("test-secret", encoding="utf-8")
+        (instance / "users.json").unlink(missing_ok=True)
+        users.enroll(instance, "shacho@example-foods.co.jp", "社長")
+
+        cfg31 = config_mod.load(instance)
+        check("設定が埋まればGoogleの口が開く", oidc.configured(cfg31))
+        check("ログイン画面にGoogleの口が出る",
+              "/login/google" in serve.render_login_page(cfg31))
+
+        srv31 = serve.make_server(instance, 0)
+        _th.Thread(target=srv31.serve_forever, daemon=True).start()
+        base31 = "http://127.0.0.1:%d" % srv31.server_address[1]
+        try:
+            import http.cookiejar
+            jar31 = http.cookiejar.CookieJar()
+
+            class _NoRedirect(urllib.request.HTTPRedirectHandler):
+                def redirect_request(self, *a, **k):
+                    return None
+
+            opener31 = urllib.request.build_opener(
+                urllib.request.HTTPCookieProcessor(jar31), _NoRedirect)
+            try:
+                opener31.open(base31 + "/login/google", timeout=10)
+                where, code31 = "", 200
+            except urllib.error.HTTPError as hop:
+                where, code31 = hop.headers.get("Location", ""), hop.status
+            check("Googleへ送り出す（302）", code31 == 302, "HTTP %d" % code31)
+            sent = urllib.parse.parse_qs(urllib.parse.urlparse(where).query)
+            for key in ("state", "nonce", "code_challenge", "client_id", "redirect_uri"):
+                check("送り出しに %s が付いている" % key, key in sent, where[:60])
+            check("PKCEの方式がS256", sent.get("code_challenge_method") == ["S256"])
+            check("控えのクッキーが渡されている",
+                  any(c.name == "castle_flow" for c in jar31))
+
+            state31, nonce31 = sent["state"][0], sent["nonce"][0]
+            issued["ok-code"] = idp2.token(email="shacho@example-foods.co.jp",
+                                           hd="example-foods.co.jp", nonce=nonce31,
+                                           lifetime=10 ** 9)
+            issued["outsider"] = idp2.token(email="arubaito@example-foods.co.jp",
+                                            hd="example-foods.co.jp", nonce=nonce31,
+                                            lifetime=10 ** 9)
+
+            def come_back(code, state):
+                url = "%s/login/google/callback?%s" % (
+                    base31, urllib.parse.urlencode({"code": code, "state": state}))
+                try:
+                    with opener31.open(url, timeout=15) as res:
+                        return res.status
+                except urllib.error.HTTPError as bad:
+                    return bad.status
+
+            # **戻りの控えが合わなければ弾く。** ここを飛ばすと、別のサイトから
+            # 投げ込まれた戻りをそのまま信じてしまう。
+            check("控えの合わない戻りは弾く", come_back("ok-code", "でたらめ") == 401)
+            check("名簿に無い人は、署名が正しくても入れない",
+                  come_back("outsider", state31) == 403)
+            check("正しく戻れば入れる", come_back("ok-code", state31) == 200)
+            check("入ったあとはセッションが配られる",
+                  any(c.name == "castle_session" for c in jar31))
+        finally:
+            srv31.shutdown()
+    finally:
+        idp_server.shutdown()
+        conf.write_bytes(keep_conf)
+        secret_file.unlink(missing_ok=True)
+        (instance / "users.json").unlink(missing_ok=True)
+        if keep_users is not None:
+            (instance / "users.json").write_bytes(keep_users)
+    check("検査で触った設定と名簿を元に戻した",
+          conf.read_bytes() == keep_conf and not secret_file.exists())
+
+    print("")
+    print("【30】在庫は月ごとに見る ── 期首から始まり、月の中で経過する")
+    # **2ヶ月を1枚に並べる意味がない。** 在庫は期首（前月末）から始まって月の中で動き、
+    # 月末に締まる。7月と8月を並べても、どちらの月の話をしているのか分からなくなる。
+    #   8月の期首在庫 ＝ 7月末の期末在庫
+    #   そこから日々  ＝ 期首 ＋ 仕入 − 売上原価
+    #   棚卸の日には、実測に戻す
+    view = pnl.stock_month(conn, cfg)
+    check("在庫の画面が月の単位で組める", view is not None)
+    check("描いているのは当月だけ", all(d.startswith(view["month"]) for d in view["days"]),
+          "%s ／ %s 〜 %s" % (view["month"], view["days"][0], view["days"][-1]))
+
+    # 期首は前月末。**当月の中には無い日付**なので、月をまたぐのはこの1点だけ。
+    check("期首（前月末）が起点として置いてある", view["opening"] is not None,
+          str(view["opening"] and view["opening"]["date"]))
+    check("期首の日付が前月の末日である",
+          view["opening"]["date"][:7] < view["month"], view["opening"]["date"])
+    daily = pnl.daily_stock(conn, cfg)
+    check("期首の値が、前月末の在庫と一致する",
+          abs(view["opening"]["amount"] - daily[view["opening"]["date"]]["amount"]) < 1.0,
+          "%.0f ／ %.0f" % (view["opening"]["amount"], daily[view["opening"]["date"]]["amount"]))
+
+    settled = [p for p in view["points"] if p["settled"]]
+    check("棚卸の日が確定として区別されている", len(settled) >= 2, "%d日" % len(settled))
+    check("確定の日は、実測そのものが入っている",
+          all(abs(p["amount"] - daily[p["date"]]["amount"]) < 1.0 for p in settled))
+
+    # **確定と確定のあいだが、積み上げになっているかを検算する。**
+    # 在庫日数のような比率で置くと、割る側が動いたぶん在庫が動いて見えて、波打つ。
+    gaps = []
+    for a, b in zip(view["points"], view["points"][1:]):
+        want = a["amount"] + (b["moved_in"] or 0) - (b["moved_out"] or 0)
+        if not b["settled"]:
+            gaps.append(abs(want - b["amount"]))
+    check("確定のあいだは、期首＋仕入−原価の積み上げになっている",
+          not gaps or max(gaps) < 1.0, "最大のずれ %.1f円" % (max(gaps) if gaps else 0))
+
+    amounts = [p["amount"] for p in view["points"]]
+    swing = [abs(b - a) / a * 100 for a, b in zip(amounts, amounts[1:]) if a]
+    check("日ごとに波打っていない（隣り合う日の変化が1%未満）",
+          swing and max(swing) < 1.0, "最大 %.2f%%" % (max(swing) if swing else 0))
+
+    # 描いていない先があることを画面に書く。**書かない可視化は、いずれ誤読される。**
+    board30 = (instance / "out" / "dashboard.html").read_text(encoding="utf-8")
+    check("在庫の画面が当月だけを描いていると分かる", "当月の在庫" in board30)
+    check("この先を描いていない理由が書いてある", "仕入の予定" in board30)
+    # 期首は月日だけ描くので、フルの日付で数えると0件で通ってしまう。図の実物を数える。
+    chart = board30[board30.index("当月の在庫"):]
+    chart = chart[:chart.index("</svg>") + 6]
+    check("期首の目印が置いてある",
+          "期首" in chart and view["opening"]["date"][5:] in chart,
+          "期首=%s" % view["opening"]["date"][5:])
+    marks = _re3.findall(r">(\d{2})</text>", chart)
+    inside = {q["date"][8:] for q in view["points"]}
+    stray = [m for m in marks if m not in inside and m != view["opening"]["date"][8:]]
+    check("当月と期首より前の日付が混ざっていない", not stray, "余計な日付 %s" % stray[:4])
+    check("棚卸の日が図の中で名指しされている", chart.count("日 実測") >= 2,
+          "%d箇所" % chart.count("日 実測"))
+
+    print("")
+    print("【28】名簿 ── 誰かは外が決め、何が見えるかは城が決める")
+    # Google Workspace のアカウントで本人確認をする。城はアカウントを持たない。
+    # **城が持つのは「このメールアドレスは、どの部門まで見てよいか」の対応表だけ。**
+    # 入退社は情シスがGoogle側で済ませ、城は触らない ── そこが目的。
+    roster = instance / "users.json"
+    keep_roster = roster.read_bytes() if roster.exists() else None
+    try:
+        users.enroll(instance, "buchou@example-foods.co.jp", "農産部長", ["農産部"])
+        users.enroll(instance, "shacho@example-foods.co.jp", "社長")
+        check("メールアドレスで名簿に載せられる", len(users.load(instance)) == 2,
+              "%d人" % len(users.load(instance)))
+        check("名簿はメールアドレスで引ける",
+              users.identify(instance, "buchou@example-foods.co.jp") is not None)
+        check("大文字小文字は同じ人として扱う",
+              users.identify(instance, "BUCHOU@Example-Foods.co.jp") is not None)
+        check("範囲が名簿から引ける",
+              users.scope_of(instance, "buchou@example-foods.co.jp") == ["農産部"],
+              str(users.scope_of(instance, "buchou@example-foods.co.jp")))
+        check("範囲を書かなければ全社",
+              users.scope_of(instance, "shacho@example-foods.co.jp") is None)
+
+        # **ここが要。** Googleで認証が通っても、名簿に無ければ城には入れない。
+        # ドメインの中の全員が入れてしまうと、認可が消える。
+        check("同じ会社のドメインでも、名簿に無ければ入れない",
+              users.identify(instance, "arubaito@example-foods.co.jp") is None)
+        check("外していないつもりの人も、外れていれば入れない",
+              users.revoke(instance, "buchou@example-foods.co.jp")
+              and users.identify(instance, "buchou@example-foods.co.jp") is None)
+    finally:
+        roster.unlink(missing_ok=True)
+        if keep_roster is not None:
+            roster.write_bytes(keep_roster)
+    check("検査で触った名簿を元に戻した",
+          (roster.read_bytes() if roster.exists() else None) == keep_roster)
+
+    print("")
+    print("【29】本人確認を外に出す ── 署名を確かめる")
+    # **通ることは何の証明にもならない。** 通る側1つに対して、弾く側を6つ確かめる。
+    # 実テナントは無いので、判定の中に発行者を立てて署名する
+    # （Google本番との疎通は、この判定では確かめていない。導入時に確かめること）。
+    import oidc
+
+    idp = oidc.TestIssuer(issuer="https://accounts.example.test",
+                          audience="castle-demo.apps.example.test")
+    good = idp.token(email="shacho@example-foods.co.jp", hd="example-foods.co.jp",
+                     nonce="n-0001")
+    want = {"issuer": idp.issuer, "audience": idp.audience,
+            "domain": "example-foods.co.jp", "nonce": "n-0001"}
+
+    claims = oidc.verify(good, idp.jwks(), want, now=idp.now)
+    check("正しく署名されたトークンは通る", claims and claims["email"] == "shacho@example-foods.co.jp",
+          str(claims and claims.get("email")))
+
+    reasons = []
+
+    def rejected(label, token, **over):
+        why = None
+        try:
+            oidc.verify(token, idp.jwks(), dict(want, **over), now=idp.now)
+        except oidc.Rejected as stop:
+            why = str(stop)
+        if why:
+            reasons.append(why)
+        check(label, why is not None, why or "**通ってしまった**")
+
+    # 署名を1文字だけ変える。**中身は正しいまま**なので、署名を見ていなければ通ってしまう。
+    head, body, sig = good.split(".")
+    swapped = sig[:-1] + ("A" if sig[-1] != "A" else "B")
+    rejected("署名を1文字変えたら弾く", "%s.%s.%s" % (head, body, swapped))
+    rejected("中身を書き換えたら弾く（別人になりすます）",
+             idp.tampered(good, {"email": "shacho@example-foods.co.jp"},
+                          {"email": "arubaito@example-foods.co.jp"}))
+    rejected("期限が切れていたら弾く",
+             idp.token(email="shacho@example-foods.co.jp", hd="example-foods.co.jp",
+                       nonce="n-0001", lifetime=-60))
+    rejected("発行者が違えば弾く", good, issuer="https://accounts.google.com")
+    rejected("宛先（このアプリ向けでない）なら弾く", good, audience="別のアプリ")
+    rejected("投げ返しの合言葉が合わなければ弾く", good, nonce="n-9999")
+    rejected("会社のドメインの外なら弾く",
+             idp.token(email="dareka@gmail.com", hd="", nonce="n-0001"))
+    # 鍵の取り違え。JWKSに複数の鍵があるとき、kid を見ずに総当たりすると
+    # 「どれかで通れば通る」になる。**発行者が指した鍵で検証する。**
+    rejected("別の鍵で署名されていたら弾く", idp.token(
+        email="shacho@example-foods.co.jp", hd="example-foods.co.jp",
+        nonce="n-0001", other_key=True))
+
+    # 理由を残さない拒否は、原因が追えない。**理由が全部違うことまで見る**
+    # ── 同じ文言を使い回していると、どこで弾いたか分からなくなる。
+    check("弾いた理由がすべて残っている", len(reasons) == 8, "%d件" % len(reasons))
+    check("理由が日本語で書かれている",
+          all(any("぀" <= c <= "ヿ" or "一" <= c <= "鿿" for c in r)
+              for r in reasons),
+          "／".join(r[:18] for r in reasons[:3]))
+    check("弾いた理由が種類ごとに違う", len(set(reasons)) >= 6,
+          "%d通り／%d件" % (len(set(reasons)), len(reasons)))
+    # 名簿と繋がっているか ── 署名が正しくても、名簿に無ければ入れない
+    keep2 = roster.read_bytes() if roster.exists() else None
+    try:
+        roster.unlink(missing_ok=True)
+        users.enroll(instance, "shacho@example-foods.co.jp", "社長")
+        who = oidc.sign_in(instance, good, idp.jwks(), want, now=idp.now)
+        check("署名が正しく、名簿にもいれば入れる", who and who["email"] == "shacho@example-foods.co.jp",
+              str(who))
+        outsider = idp.token(email="arubaito@example-foods.co.jp",
+                             hd="example-foods.co.jp", nonce="n-0001")
+        check("署名が正しくても、名簿に無ければ入れない",
+              oidc.sign_in(instance, outsider, idp.jwks(), want, now=idp.now) is None)
+    finally:
+        roster.unlink(missing_ok=True)
+        if keep2 is not None:
+            roster.write_bytes(keep2)
+
+    print("")
+    print("【27】届いていないことに、気づけるか")
+    # **静かに古いデータで画面が出るのが、いちばん悪い。**
+    # 自動にするほど「今日も動いたはず」と思い込むので、鮮度は画面に出す。
+    fresh = intake.freshness(conn, cfg)
+    check("サイロごとの最終データ日が出る", len(fresh) >= 3,
+          "／".join("%s %s" % (f["silo"], f["last"]) for f in fresh))
+    check("周期が書いてある", all(f["cycle"] for f in fresh),
+          "／".join("%s=%s" % (f["silo"], f["cycle"]) for f in fresh))
+    check("いまは全部そろっている（遅れなし）", not [f for f in fresh if f["late"]],
+          "遅れ: %s" % [f["silo"] for f in fresh if f["late"]])
+    # **通ることは何の証明にもならない。** 遅れを作って、警告が出ることを見る。
+    late = intake.freshness(conn, cfg, today="2027-06-30")
+    check("日が経てば、遅れとして名指しされる",
+          len(late) == len([f for f in late if f["late"]]),
+          "遅れ %d／%d" % (len([f for f in late if f["late"]]), len(late)))
+    check("遅れの日数が数えてある", all(f["behind"] > 0 for f in late if f["late"]),
+          "／".join("%s %d日" % (f["silo"], f["behind"]) for f in late if f["late"]))
+
+    board26 = (instance / "out" / "dashboard.html").read_text(encoding="utf-8")
+    check("鮮度が画面に出ている", "データの届き具合" in board26)
+    for f in fresh:
+        check("画面に「%s」の届き具合が出ている" % f["silo"],
+              f["silo"] in board26 and f["last"] in board26)
+
 
     return report()
 

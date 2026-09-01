@@ -20,11 +20,13 @@ HTTPSではない。社内網に出すならプロキシでHTTPSを終端する�
 
 import argparse
 import datetime
+import hmac
 import html
 import http.cookies
 import http.server
 import json
 import pathlib
+import secrets
 import string
 import sys
 import time
@@ -37,6 +39,8 @@ import config as config_mod
 import db
 import knowledge
 import promote
+import oidc
+import sessions
 import users
 from normalize import parse_date
 
@@ -53,8 +57,33 @@ def theme():
 KIND = "申し送り"
 MAX_TEXT = 400
 MAX_AUTHOR = 30
-COOKIE = "castle_key"
+COOKIE = "castle_session"
+FLOW_COOKIE = "castle_flow"
 LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def _sign_in_with_google(instance, cfg, code, redirect_uri, verifier, nonce, opener=None):
+    """引換券をIDトークンに換え、署名を確かめ、名簿を引く。**3つそろって初めて入れる。**
+
+    署名が正しいのは「その人が本物である」ことしか言わない。
+    本物であることと、見てよいことは別 ── 名簿がその境目。
+    """
+    auth = cfg.auth or {}
+    secret_path = pathlib.Path(instance) / auth.get("client_secret_file", "")
+    secret = secret_path.read_text(encoding="utf-8").strip() if secret_path.is_file() else ""
+    try:
+        token = oidc.exchange(cfg, code, redirect_uri, verifier, secret, opener=opener)
+        jwks = oidc.fetch_jwks(cfg, opener=opener)
+    except Exception as failure:                      # noqa: BLE001
+        print("  Googleとのやり取りに失敗: %s" % failure)
+        return None
+    want = {"issuer": auth.get("issuer"), "audience": auth.get("client_id"),
+            "domain": auth.get("domain"), "nonce": nonce}
+    try:
+        return oidc.sign_in(instance, token, jwks, want)
+    except oidc.Rejected as stop:
+        print("  受け付けませんでした: %s" % stop)
+        return None
 
 
 def guard_exposure(instance, host, acknowledged=False):
@@ -278,8 +307,14 @@ def render_knowledge_page(conn, cfg, identity, params=None, message="", scope=No
 
 
 def render_login_page(cfg, message=""):
+    # Googleの口は、設定が埋まっているときだけ出す。
+    # **押しても入れないボタンを置かない** ── 押した人が原因を探すことになるので。
+    google = ('<a class="google" href="/login/google">Google アカウントで入る'
+              "<small>会社のアカウント（@%s）で本人確認します</small></a>"
+              '<p class="or">または、配られたアクセスキーで</p>'
+              % html.escape((cfg.auth or {}).get("domain", ""))) if oidc.configured(cfg) else ""
     return string.Template(LOGIN_TEMPLATE.read_text(encoding="utf-8")).substitute(
-        theme=theme(),
+        theme=theme(), google=google,
         company=html.escape(cfg.company), message=message)
 
 
@@ -389,7 +424,14 @@ def make_server(instance, port=8765, host="127.0.0.1"):
             except http.cookies.CookieError:
                 return None
             morsel = jar.get(COOKIE)
-            return users.resolve(instance, morsel.value) if morsel else None
+            if not morsel:
+                return None
+            # クッキーに入っているのは署名付きのセッション。鍵の文字列ではない。
+            who = sessions.read(instance, morsel.value)
+            if who is None:
+                return None
+            row = users.identify(instance, who)
+            return (row.get("name") or who) if row else None
 
         def _scope(self):
             """この鍵で見てよい部門。None は全社。"""
@@ -398,6 +440,43 @@ def make_server(instance, port=8765, host="127.0.0.1"):
 
         def _needs_login(self):
             return users.enabled(instance) and self._identity() is None
+
+
+        # ── Google で入る ──────────────────────────────────
+        #
+        # 城はアカウントを持たない。**誰かを決めるのは Google Workspace。**
+        # 設定（config.json の auth）が埋まっていなければ、この口は開かない
+        # ── 押しても入れないボタンを置かない。
+
+        def _redirect_uri(self):
+            host = self.headers.get("Host") or "127.0.0.1:8765"
+            return "http://%s/login/google/callback" % host
+
+        def _go(self, url, cookie=None):
+            self.send_response(302)
+            self.send_header("Location", url)
+            if cookie:
+                self.send_header("Set-Cookie", cookie)
+            self.end_headers()
+
+        def _stash(self, state, nonce, verifier):
+            """送り出す前の控え。**戻ってきたものと突き合わせるために要る。**
+            署名を付けてクッキーに預ける ── サーバ側に置き場を持たないため。"""
+            body = "%s:%s:%s" % (state, nonce, verifier)
+            return "%s=%s; Path=/; Max-Age=600; HttpOnly; SameSite=Lax" % (
+                FLOW_COOKIE, sessions.issue(instance, body, hours=1))
+
+        def _unstash(self):
+            raw = self.headers.get("Cookie") or ""
+            jar = http.cookies.SimpleCookie()
+            try:
+                jar.load(raw)
+            except http.cookies.CookieError:
+                return None
+            morsel = jar.get(FLOW_COOKIE)
+            body = sessions.read(instance, morsel.value) if morsel else None
+            parts = (body or "").split(":")
+            return parts if len(parts) == 3 else None
 
         def do_GET(self):
             path = urllib.parse.urlparse(self.path).path
@@ -408,6 +487,57 @@ def make_server(instance, port=8765, host="127.0.0.1"):
                     return self._send(
                         render_login_page(cfg, '<div class="msg">閉じました。</div>'),
                         cookie="%s=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict" % COOKIE)
+                if path == "/login/google":
+                    if not oidc.configured(cfg):
+                        return self._send("<h1>404</h1><p>Googleの口は開いていません。</p>", 404)
+                    state = secrets.token_urlsafe(24)
+                    nonce = secrets.token_urlsafe(24)
+                    verifier = secrets.token_urlsafe(48)
+                    # 控えを置いてから送り出す。**置かずに送ると、戻りを検算できない。**
+                    return self._go(
+                        oidc.start_url(cfg, self._redirect_uri(), state, nonce,
+                                       oidc.challenge_of(verifier)),
+                        cookie=self._stash(state, nonce, verifier))
+
+                if path == "/login/google/callback":
+                    if not oidc.configured(cfg):
+                        return self._send("<h1>404</h1>", 404)
+                    if too_many("login", self.client_address[0]):
+                        return self._send(render_login_page(
+                            cfg, '<div class="msg">試行が多すぎます。'
+                                 "しばらく待ってからやり直してください。</div>"), 429)
+                    got = {k: v[0] for k, v in urllib.parse.parse_qs(
+                        urllib.parse.urlparse(self.path).query).items()}
+                    stashed = self._unstash()
+                    if stashed is None:
+                        return self._send(render_login_page(
+                            cfg, '<div class="msg">やり直してください（控えが切れています）。</div>'), 401)
+                    state, nonce, verifier = stashed
+                    # **送り出した控えと突き合わせる。** ここを飛ばすと、
+                    # 別のサイトから投げ込まれた戻りを、そのまま信じてしまう。
+                    # **外から来た値をそのまま渡さない。** compare_digest は
+                    # 非ASCIIの文字列で例外を投げる ── そのままだと、日本語を1文字
+                    # 混ぜた state を投げるだけでサーバが落ちる（2026-09-02、判定が見つけた）。
+                    if not hmac.compare_digest(got.get("state", "").encode("utf-8"),
+                                               state.encode("utf-8")):
+                        return self._send(render_login_page(
+                            cfg, '<div class="msg">戻りの控えが合いません。</div>'), 401)
+                    who = _sign_in_with_google(instance, cfg, got.get("code", ""),
+                                               self._redirect_uri(), verifier, nonce)
+                    if who is None:
+                        return self._send(render_login_page(
+                            cfg, '<div class="msg">このアカウントでは開けません。'
+                                 "情報システム課に、城の名簿への登録を依頼してください。</div>"), 403)
+                    return self._send(
+                        render_note_page(instance, conn, cfg, identity=who["name"],
+                                         scope=who["scope"],
+                                         message='<div class="msg ok">%s として開きました。</div>'
+                                                 % html.escape(who["name"])),
+                        cookie="%s=%s; Path=/; HttpOnly; SameSite=Lax" % (
+                            COOKIE, sessions.issue(
+                                instance, who["email"],
+                                hours=int((cfg.auth or {}).get("session_hours", 8)))))
+
                 if path == "/guide":
                     return self._send(render_guide_page(cfg, self._identity()))
                 if path == "/login" or self._needs_login():
@@ -457,7 +587,8 @@ def make_server(instance, port=8765, host="127.0.0.1"):
                         render_note_page(instance, conn, cfg, identity=name,
                                          message='<div class="msg ok">%s として開きました。</div>'
                                                  % html.escape(name)),
-                        cookie="%s=%s; Path=/; HttpOnly; SameSite=Strict" % (COOKIE, payload["token"]))
+                        cookie="%s=%s; Path=/; HttpOnly; SameSite=Strict" % (
+                            COOKIE, sessions.issue(instance, name)))
 
                 if self._needs_login():
                     return self._send(render_login_page(cfg), 401)

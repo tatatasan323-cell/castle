@@ -17,7 +17,7 @@
   },
   "budget": {
     "_説明": "予算はどの会社にもあるが、どのシステムにも入っていない。だからここに置く。月次・円。",
-    "monthly_operating_profit": 30000000,
+    "monthly_operating_profit": 22500000,
     "department_gross": {
       "加工食品部": 88000000,
       "低温食品部": 80000000,
@@ -219,6 +219,88 @@
       ],
       "productivity": false,
       "reason": "売上を持たない"
+    },
+    {
+      "code": "9040",
+      "name": "情報システム課",
+      "aliases": [
+        "情報システム",
+        "情シス",
+        "システム課",
+        "ＩＴ",
+        "IT"
+      ],
+      "productivity": false,
+      "reason": "売上を持たない。全社のアカウントと権限を預かる部署で、クラウドのライセンス料もここに乗る"
     }
-  ]
+  ],
+  "sources": {
+    "_説明": "ベンダーと合意した受入仕様。ここに書いた名前のものだけを取り込む。規約に無い名前を推測で取り込むと、間違った種別のまま骨に入るので、保留に退ける。ベンダーに渡す文面は 受入仕様.md。",
+    "基準日": "2026-08-13",
+    "_基準日 の説明": "鮮度を測る起点。実際の導入では書かない（書かなければ今日を使う）。このデモは2026-08-12で止まった時間の中にあるので、固定している。",
+    "会計の締め日": 10,
+    "締め後の猶予日数": 5,
+    "受入": [
+      {
+        "silo": "A社販売管理",
+        "pattern": "A社販売管理_売上日報_*.csv",
+        "kind": "売上",
+        "cycle": "日次",
+        "allow_days": 4
+      },
+      {
+        "silo": "A社販売管理",
+        "pattern": "A社販売管理_仕入日報_*.csv",
+        "kind": "仕入",
+        "cycle": "日次",
+        "allow_days": 4
+      },
+      {
+        "silo": "A社販売管理",
+        "pattern": "A社販売管理_週次在庫_*.csv",
+        "kind": "在庫",
+        "cycle": "週次",
+        "allow_days": 11
+      },
+      {
+        "silo": "B社勤怠",
+        "pattern": "B社勤怠_勤務実績_*.csv",
+        "kind": "労働時間",
+        "cycle": "日次",
+        "allow_days": 4
+      },
+      {
+        "silo": "C社会計",
+        "pattern": "C社会計_部門別損益_*.csv",
+        "kind": "部門損益",
+        "cycle": "月次"
+      },
+      {
+        "silo": "C社会計",
+        "pattern": "C社会計_試算表_*.csv",
+        "kind": "試算表",
+        "cycle": "月次"
+      },
+      {
+        "silo": "C社会計",
+        "pattern": "C社会計_月末残高_*.csv",
+        "kind": "残高",
+        "cycle": "月次"
+      }
+    ]
+  },
+  "auth": {
+    "_説明": "本人確認をどこに任せるか。**この節が無ければGoogleの口は開かない**（従来のアクセスキーだけで動く）。城はアカウントを持たず、情シスがGoogle Workspace側で入退社を済ませる。",
+    "provider": "google",
+    "domain": "example-foods.co.jp",
+    "client_id": "",
+    "_client_id の説明": "Google Cloud コンソールで作るOAuthクライアントのID。**空のあいだはGoogleの口を開かない。** 情シスが入れる。",
+    "client_secret_file": "google_client_secret.txt",
+    "_client_secret_file の説明": "秘密は設定に直書きせず、instance の別ファイルに置く（.gitignore 済み。リポジトリに載らない）。",
+    "issuer": "https://accounts.google.com",
+    "auth_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
+    "token_endpoint": "https://oauth2.googleapis.com/token",
+    "jwks_uri": "https://www.googleapis.com/oauth2/v3/certs",
+    "session_hours": 8
+  }
 }

@@ -3,8 +3,13 @@ instance/data.db
 instance/data.db-wal
 instance/data.db-shm
 instance/users.json
+instance/google_client_secret.txt
+instance/session.key
 instance/backups/
 instance/incoming/
+instance/incoming/取込済/
+instance/incoming/保留/
+instance/intake.log
 instance/out/
 
 __pycache__/

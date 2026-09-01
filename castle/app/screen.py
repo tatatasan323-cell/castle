@@ -7,6 +7,9 @@
 from html import escape
 
 
+MINUS = chr(0x2212)
+
+
 def money(value, sign=False):
     """億と万で出す。経営者が読む単位に合わせる。"""
     if value is None:
@@ -26,6 +29,39 @@ def pct(value, good_high=True, unit="%"):
 
 def _change(now, base):
     return None if not base or now is None else (now / base - 1) * 100
+
+
+def freshness(items, today):
+    """データの届き具合。**自動にするほど「今日も動いたはず」と思い込む。**
+
+    静かに古いデータで画面が出るのが、いちばん悪い。だから届いていないことを
+    画面の側から言う ── 気づくのを人の注意力に頼らない。
+    遅れが無いときは1行に畳む。毎回大きく出す警告は、そのうち読まれなくなる。
+    """
+    if not items:
+        return ""
+    late = [f for f in items if f["late"]]
+    rows = []
+    for f in sorted(items, key=lambda x: (not x["late"], x["silo"], x["kind"])):
+        rows.append('<tr class="%s"><td>%s</td><td>%s</td><td>%s</td>'
+                    '<td class="num">%s</td><td class="num">%s</td><td>%s</td></tr>'
+                    % ("late" if f["late"] else "", escape(f["silo"]), escape(f["kind"]),
+                       f["cycle"], f["last"],
+                       "%d日前" % f["behind"] if f["last"] != "—" else "—",
+                       ("<b class=\"bad\">遅れ</b>（%s）" % f["expect"]) if f["late"]
+                       else "届いています"))
+    head = ('<b class="bad">%d本のデータが届いていません</b>' % len(late) if late
+            else "予定どおり届いています")
+    return ('<details class="freshness"%s><summary>データの届き具合 ── %s'
+            '<span class="muted">（%s 時点）</span></summary>'
+            '<table><thead><tr><th>サイロ</th><th>種類</th><th>周期</th>'
+            '<th>最終データ日</th><th>経過</th><th>状態</th></tr></thead>'
+            "<tbody>%s</tbody></table>"
+            '<p class="legend">置き場に届いたものを見張りが自動で取り込みます。'
+            '受入仕様にない名前のファイルは<b>推測で取り込まず、保留へ退けます</b>'
+            ' ── 種別を当てにいくと、間違った種別のまま記録に入るためです。</p>'
+            "</details>"
+            % (" open" if late else "", head, today, "".join(rows)))
 
 
 def landing(m):
@@ -593,6 +629,90 @@ def purchase(book):
         "</div>"
         % (money(buy["actual"]), money(buy["forecast"]), money(buy["last_year"]),
            pct(buy["vs_ly"], good_high=False)))
+
+
+def stock_month(view, width=940, height=280, pad=44):
+    """当月の在庫。**期首から始まり、月の中で経過する。**
+
+    2ヶ月を1枚に並べない ── 在庫は月ごとに締まるので、
+    並べるとどちらの月の話をしているのか分からなくなる。
+
+    期首（前月末）は左に1点だけ置いて、点線でつなぐ。**線は当月しか引かない。**
+    最後の棚卸までは実線、その先は破線 ── 棚卸で裏が取れているかどうかが、
+    確定と推定の分かれ目なので。
+    """
+    if not view or not view["points"]:
+        return ""
+    points, opening = view["points"], view["opening"]
+    values = [p["amount"] for p in points] + ([opening["amount"]] if opening else [])
+    low, high = min(values), max(values)
+    span = (high - low) or abs(high) or 1.0
+    low, high = low - span * 0.35, high + span * 0.30
+    right, left = width - 104, pad + (52 if opening else 0)
+    count = len(points)
+
+    def x_of(i):
+        return left + (right - left) * (i / max(count - 1, 1))
+
+    def y_of(v):
+        return height - pad - (height - pad - 26) * ((v - low) / (high - low))
+
+    cut = max((i for i, p in enumerate(points) if p["settled"]), default=0)
+    out = ['<svg viewBox="0 0 %d %d" role="img" aria-label="当月の在庫">' % (width, height)]
+
+    # 期首。**当月の中には無い日付**なので、離して置き、点線でつなぐ。
+    if opening:
+        ox, oy = pad, y_of(opening["amount"])
+        out.append('<circle cx="%d" cy="%.1f" r="4" fill="none" stroke="var(--prior)" '
+                   'stroke-width="2"/>' % (ox, oy))
+        out.append('<line x1="%d" y1="%.1f" x2="%.1f" y2="%.1f" stroke="var(--prior)" '
+                   'stroke-width="1.4" stroke-dasharray="3 4"/>'
+                   % (ox, oy, x_of(0), y_of(points[0]["amount"])))
+        out.append('<text x="%d" y="%.1f" fill="var(--prior)" font-size="11" '
+                   'text-anchor="middle">期首</text>' % (ox, oy - 12))
+        out.append('<text x="%d" y="%d" fill="var(--prior)" font-size="10.5" '
+                   'text-anchor="middle">%s</text>' % (ox, height - pad + 16, opening["date"][5:]))
+
+    def line(items, start=0):
+        return " ".join("%.1f,%.1f" % (x_of(start + i), y_of(p["amount"]))
+                        for i, p in enumerate(items))
+
+    out.append('<polyline fill="none" stroke="var(--bar)" stroke-width="3" '
+               'stroke-linejoin="round" points="%s"/>' % line(points[:cut + 1]))
+    if cut < count - 1:
+        out.append('<polyline fill="none" stroke="var(--bar)" stroke-width="2.5" '
+                   'stroke-dasharray="6 5" points="%s"/>' % line(points[cut:], start=cut))
+    for i, p in enumerate(points):
+        if p["settled"]:
+            out.append('<circle cx="%.1f" cy="%.1f" r="5" fill="var(--bar)"/>'
+                       % (x_of(i), y_of(p["amount"])))
+            out.append('<text x="%.1f" y="%.1f" fill="var(--muted)" font-size="10.5" '
+                       'text-anchor="middle">%s</text>'
+                       % (x_of(i), y_of(p["amount"]) + 20, p["date"][8:] + "日 実測"))
+    last = points[-1]
+    out.append('<circle cx="%.1f" cy="%.1f" r="4" fill="none" stroke="var(--bar)" '
+               'stroke-width="2"/>' % (x_of(count - 1), y_of(last["amount"])))
+
+    tags = [(y_of(last["amount"]), "いま %.2f億円" % (last["amount"] / 1e8), "var(--ink)", 13, 700)]
+    if opening:
+        diff = last["amount"] - opening["amount"]
+        tags.append((y_of(opening["amount"]), "期首 %.2f億円" % (opening["amount"] / 1e8),
+                     "var(--prior)", 11, 400))
+        tags.append((y_of(last["amount"]) + 16, "期首から %s%.0f万円"
+                     % ("+" if diff >= 0 else MINUS, abs(diff) / 1e4),
+                     "var(--muted)", 11, 400))
+    for (_, text, color, size, weight), y in zip(tags, _stack(tags, 15.0, 16.0, height - 32)):
+        out.append('<text x="%d" y="%.1f" fill="%s" font-size="%d" font-weight="%d">%s</text>'
+                   % (right + 8, y + 4, color, size, weight, text))
+
+    for i, p in enumerate(points):
+        if i in (0, count - 1) or p["settled"]:
+            out.append('<text x="%.1f" y="%d" fill="var(--muted)" font-size="10.5" '
+                       'text-anchor="middle">%s</text>'
+                       % (x_of(i), height - pad + 16, p["date"][8:]))
+    out.append('<text x="%d" y="%d" fill="var(--muted)" font-size="11">%s月</text>'
+               % (pad, 18, int(view["month"][5:7])))
+    return "".join(out) + "</svg>"
 
 
 def alerts(departments, trends, margin_trends, attached, threshold=5.0):

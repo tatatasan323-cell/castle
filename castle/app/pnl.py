@@ -148,8 +148,49 @@ def daily_stock(conn, cfg, days=None, window=None):
             amount, settled = anchor + moved, False
         out[day] = {"amount": amount, "settled": settled, "from": anchor_at,
                     "moved": 0.0 if settled else moved, "daily_cost": daily_cost,
+                    # その日の出入り。**画面で「期首＋仕入−原価」を検算できる形にする。**
+                    "in": buys.get(day, 0.0), "out": cost,
                     "days_of_stock": (amount / daily_cost) if daily_cost else None}
     return out
+
+
+def stock_month(conn, cfg, month=None):
+    """当月の在庫。**期首（前月末）から始まり、月の中で経過する。**
+
+    在庫は月ごとに締まる。2ヶ月を1枚に並べても、どちらの月の話をしているのか
+    分からなくなる。見たいのは「期首からいくら動いて、いまどこにいるか」だけ。
+
+        当月の期首在庫 ＝ 前月末の期末在庫
+        そこから日々    ＝ 期首 ＋ 仕入 − 売上原価
+        棚卸の日には、実測に戻す
+
+    **期首は前月末の1点だけ置く。線は当月しか引かない。**
+    先の日は描かない ── 仕入の予定を持っていないため。持っていない数字は作らない。
+    """
+    daily = daily_stock(conn, cfg)
+    if not daily:
+        return None
+    order = sorted(daily)
+    month = month or order[-1][:7]
+    days = [d for d in order if d[:7] == month]
+    if not days:
+        return None
+
+    before = [d for d in order if d < days[0]]
+    opening = None
+    if before:
+        last = before[-1]
+        opening = {"date": last, "amount": daily[last]["amount"],
+                   "settled": daily[last]["settled"]}
+
+    points = [{"date": d, "amount": daily[d]["amount"], "settled": daily[d]["settled"],
+               "moved_in": daily[d]["in"], "moved_out": daily[d]["out"]} for d in days]
+    settled = [p for p in points if p["settled"]]
+    return {"month": month, "opening": opening, "days": days, "points": points,
+            "last": days[-1],
+            "last_settled": settled[-1]["date"] if settled else None,
+            "in_total": sum(p["moved_in"] for p in points),
+            "out_total": sum(p["moved_out"] for p in points)}
 
 
 def weekly_cost_rates(conn, cfg=None):

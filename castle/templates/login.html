@@ -9,6 +9,12 @@ $theme
 .wrap{max-width:440px;padding-top:80px}
 form{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 24px}
 form label{margin-top:0}
+.google{display:block;text-align:center;background:var(--card-2);border:1px solid var(--line-2);
+  border-radius:12px;padding:16px;color:var(--ink);text-decoration:none;font-size:14px;
+  font-weight:600;margin-bottom:18px}
+.google:hover{border-color:var(--bar);color:var(--bar)}
+.google small{display:block;margin-top:6px;font-size:11.5px;color:var(--muted);font-weight:400}
+.or{text-align:center;color:var(--muted);font-size:11.5px;margin:0 0 16px}
 .hint{color:var(--muted);font-size:11.5px;margin-top:24px;line-height:2}
 .hint a{color:var(--bar)}
 </style>
@@ -21,6 +27,8 @@ form label{margin-top:0}
 <div class="lead">城を開くには、配られたアクセスキーが要ります。</div>
 
 $message
+
+$google
 
 <form method="post" action="/login">
   <label for="token">アクセスキー</label>

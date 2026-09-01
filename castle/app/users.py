@@ -57,6 +57,48 @@ def save(instance, rows):
         json.dumps({"users": rows}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def _norm(email):
+    """メールアドレスは大文字小文字を区別しない。**同じ人を2人にしない。**"""
+    return (email or "").strip().lower()
+
+
+def enroll(instance, email, name, scope=None):
+    """名簿に載せる。**鍵は発行しない。** 本人確認は Google Workspace が済ませる。
+
+    城が持つのは「このメールアドレスは、どの部門まで見てよいか」だけ。
+    入社・退職・異動は情シスがGoogle側で済ませ、城の名簿はそのまま置いておける
+    ── Googleでアカウントを止めれば、そもそも城の入口に届かないため。
+    """
+    email = _norm(email)
+    if "@" not in email:
+        raise ValueError("メールアドレスが要ります: %r" % email)
+    rows = [r for r in load(instance) if _norm(r.get("email")) != email]
+    row = {"email": email, "name": (name or "").strip() or email,
+           "enrolled": datetime.datetime.now().isoformat(timespec="seconds")}
+    if scope:
+        row["scope"] = sorted(set(scope))
+    rows.append(row)
+    save(instance, sorted(rows, key=lambda r: r.get("email", "")))
+    return row
+
+
+def identify(instance, who):
+    """名簿を引く。**載っていなければ None。**
+
+    ここが認可の要。Googleで本人確認が通っても、名簿に無ければ城には入れない。
+    「同じ会社のドメインなら通す」にすると、全社員が経営の数字を見られる
+    ── それは認可が無いのと同じ。
+
+    メールアドレスでも表示名でも引ける。IdPを繋ぐ前に配った鍵の利用者は
+    メールアドレスを持っていないので、そちらも通す（移行のあいだだけ）。
+    """
+    key = _norm(who)
+    for row in load(instance):
+        if _norm(row.get("email")) == key or row.get("name") == who:
+            return row
+    return None
+
+
 def issue(instance, name, scope=None):
     """鍵を発行して平文を返す。同じ名前で出し直すと、古い鍵は失効する。
 
@@ -89,22 +131,26 @@ def resolve(instance, token):
     return None
 
 
-def scope_of(instance, name):
-    """その人が見てよい部門。None は全社。
+def scope_of(instance, who):
+    """その人が見てよい部門。None は全社。メールアドレスでも表示名でも引ける。
 
-    鍵に scope が書かれていなければ全社 ── 既存の鍵を黙って締め出さない。
-    絞るのは、絞ると書いた鍵だけ。
+    scope が書かれていなければ全社 ── 絞るのは、絞ると書いた行だけ。
+    **「名簿に無い人」と「範囲を絞っていない人」は別物。** 前者は identify() が弾く。
     """
+    key = _norm(who)
     for row in load(instance):
-        if row["name"] == name:
+        if _norm(row.get("email")) == key or row.get("name") == who:
             value = row.get("scope")
             return list(value) if value else None
     return None
 
 
-def revoke(instance, name):
+def revoke(instance, who):
+    """名簿から外す。メールアドレスでも表示名でも外せる。"""
     rows = load(instance)
-    kept = [r for r in rows if r["name"] != (name or "").strip()]
+    key = _norm(who)
+    kept = [r for r in rows
+            if _norm(r.get("email")) != key and r.get("name") != (who or "").strip()]
     if len(kept) == len(rows):
         return False
     save(instance, kept)

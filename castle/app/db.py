@@ -24,4 +24,10 @@ def connect(instance):
     conn = sqlite3.connect(instance / "data.db")
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+    # 既にあるDBに列を足す。schema.sql の CREATE TABLE IF NOT EXISTS は
+    # 「既にある表」には効かないので、ここで補う。
+    have = {c[1] for c in conn.execute("PRAGMA table_info(import_log)")}
+    if "fingerprint" not in have:
+        conn.execute("ALTER TABLE import_log ADD COLUMN fingerprint TEXT NOT NULL DEFAULT ''")
+        conn.commit()
     return conn

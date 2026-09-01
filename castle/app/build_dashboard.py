@@ -23,6 +23,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import config as config_mod
 import db
+import intake
 import knowledge
 import pnl
 import screen
@@ -539,18 +540,18 @@ def build(instance, verbose=False, nav=False, scope=None):
                                          lambda v: "%.1f%%" % v, "c-rate"),
         "chart_months": len(chart_months),
     }
-    # 在庫だけは日次で見る意味がある ── 発注の判断は日の単位で起きるから。
-    # ただし**前月頭から**に限る（約6週）。棚卸は週に一度なので、当月だけでは
-    # 週の呼吸が1周期も出ない。かといって延々と伸ばせば、月ごとに確定するという
-    # 損益の構造から外れる。月の境目が1本入る長さが、いちばん短くて読める長さ。
-    this_month = book["month"]["month"] if book["month"] else None
-    since = ("%04d-%02d" % (int(this_month[:4]) - (this_month[5:7] == "01"),
-                            int(this_month[5:7]) - 1 or 12)) if this_month else None
-    stock_days = [d for d in sorted(stock_by_day) if since and d[:7] >= since]
+    # 在庫は**当月だけ**を描く（期首＝前月末の1点だけ添える）。
+    # 2ヶ月を1枚に並べても、どちらの月の話をしているのか分からなくなる。
+    stock_view = pnl.stock_month(conn, cfg)
+    stock_days = (stock_view or {}).get("days") or []
 
     if scope is None:
         company_block = string.Template(
             (PART / "_company.html").read_text(encoding="utf-8")).substitute(
+            freshness=screen.freshness(
+                intake.freshness(conn, cfg),
+                (cfg.sources or {}).get("基準日")
+                or datetime.date.today().isoformat()),
             landing=screen.landing(month),
             breakdown=screen.breakdown(month),
             ladder=screen.ladder(book),
@@ -558,14 +559,9 @@ def build(instance, verbose=False, nav=False, scope=None):
             purchase=screen.purchase(book) + screen.stock(book),
             # 仕入の線は外した。金額は上のカードに出ているうえ、
             # 在庫を積み上げで置くようにしたので、仕入の線は在庫の線の微分になる。
-            stockchart=screen.series_chart(
-                stock_days,
-                [("在庫（週次の実データ）",
-                  [stock_by_day[d]["amount"] if stock_by_day[d]["settled"] else None
-                   for d in stock_days]),
-                 ("在庫（買った分・売った分から積み上げた想定）",
-                  [stock_by_day[d]["amount"] for d in stock_days])],
-                lambda v: "%.2f億" % (v / 1e8), "c-stock") if stock_days else "")
+            stockchart=screen.stock_month(pnl.stock_month(conn, cfg)),
+            stock_month=(pnl.stock_month(conn, cfg) or {}).get("month", ""),
+        )
         trend_block = string.Template(
             (PART / "_trend.html").read_text(encoding="utf-8")).substitute(
             voyage=screen.voyage(month),
@@ -587,6 +583,7 @@ def build(instance, verbose=False, nav=False, scope=None):
         theme=THEME.read_text(encoding="utf-8"),
         company=cfg.company,
         generated=datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+        stamp=datetime.datetime.now().strftime("%Y%m%d-%H%M"),
         last_actual=month["last_actual_date"],
         actual_days=month["actual_days"], remaining_days=month["remaining_days"],
         nav=(NAV if nav else ""),
@@ -612,6 +609,7 @@ def build(instance, verbose=False, nav=False, scope=None):
     # 判定者が読む用。画面のHTMLを機械が読むのは脆いので、数字は別に出す。
     (out / "summary.json").write_text(json.dumps({
         "generated": datetime.datetime.now().isoformat(timespec="seconds"),
+        "stamp": datetime.datetime.now().strftime("%Y%m%d-%H%M"),
         "metric": metric["formula"],
         "window": [dates[-window], dates[-1]],
         "estimated_days": len(est_in_window),

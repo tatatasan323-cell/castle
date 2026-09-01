@@ -93,6 +93,13 @@ table.ladder.small td{padding:7px 10px}
 .verdict{font-size:13.5px;line-height:1.85;margin:14px 0 0;color:var(--ink)}
 .verdict b{font-size:15px}.verdict b.ok{color:var(--ok)}
 .verdict b.warn{color:var(--warn)}.verdict b.bad{color:var(--bad)}
+.freshness{background:var(--card);border:1px solid var(--line);border-radius:12px;
+  padding:14px 18px;margin-bottom:18px;font-size:13px}
+.freshness summary{cursor:pointer;color:var(--muted);font-size:13.5px}
+.freshness table{margin-top:12px;font-size:12.5px}
+.freshness tr.late td{color:var(--bad)}
+.stamp{margin-left:10px;padding:2px 8px;border:1px solid var(--line-2);border-radius:99px;
+  font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
 .panel{display:none}
 #ch-total:checked~#p-total,#ch-amount:checked~#p-amount,
 #ch-rate:checked~#p-rate,#ch-year:checked~#p-year{display:block}
@@ -163,7 +170,8 @@ $nav
 <header>
   <div class="eyebrow">$company</div>
   <h1>経営ステータス</h1>
-  <div class="sub">$generated 時点 ／ データは $last_actual まで届いています</div>
+  <div class="sub">$generated 時点 ／ データは $last_actual まで届いています
+    <span class="stamp" title="この画面の版。URLの ?v= と一致していれば最新です">版 $stamp</span></div>
 </header>
 
 $notice

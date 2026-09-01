@@ -41,5 +41,8 @@ CREATE TABLE IF NOT EXISTS import_log (
   rows_ok   INTEGER NOT NULL,
   rows_skip INTEGER NOT NULL,
   note      TEXT NOT NULL DEFAULT '',
+  -- 取り込んだ中身のSHA-256。名前ではなく中身で「同じもの」を判定する
+  -- ── 名前で見ると、同名で送り直された訂正版を取りこぼす。
+  fingerprint TEXT NOT NULL DEFAULT '',
   undone_at TEXT
 );
