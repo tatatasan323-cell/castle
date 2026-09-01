@@ -1479,6 +1479,60 @@ def _run(instance):
 
 
 
+
+    print("")
+    print("【32】常時見えるのは数字。解説は、要るときだけ出す")
+    # **毎日見る人には、解説は邪魔になる。** はじめての人には要る。
+    # 消さずに畳む ── 限界を書いていない可視化は、いずれ誤読されるので。
+    import re as _re4
+    board32 = (instance / "out" / "dashboard.html").read_text(encoding="utf-8")
+
+    def _chars(cls, text):
+        return sum(len(_re4.sub("<[^>]+>", "", h))
+                   for h in _re4.findall(r'<p class="%s">(.*?)</p>' % cls, text, _re4.S))
+
+    def _visible(text):
+        """畳んである中（details の中）を除いた、常時見えている解説の量。"""
+        outside = _re4.sub(r"<details.*?</details>", "", text, flags=_re4.S)
+        return _chars("lead", outside) + _chars("legend", outside)
+
+    check("常時見えている解説が300文字以内", _visible(board32) <= 300,
+          "%d文字" % _visible(board32))
+    # **消したのではなく、畳んだ。** 中身が残っていることを見る。
+    check("限界の記述は消えていない（畳んだだけ）", "この画面が答えないこと" in board32)
+    check("在庫の読み方も残っている", "期首 ＋ 仕入 − 売上原価" in board32)
+    check("開く口がある", board32.count("<summary") >= 4,
+          "%d箇所" % board32.count("<summary"))
+
+    # 判定語は畳まない。**経営者が読む本体を隠したら、画面の意味が無い。**
+    plain = _re4.sub(r"<details.*?</details>", "", board32, flags=_re4.S)
+    check("年間の判定語は常時見えている", "予算とほぼ同じ線" in plain or "届く見通し" in plain
+          or "届かない見通し" in plain)
+    check("要確認の所見は常時見えている", "いま手を打つこと" in plain)
+
+    # 触る画面には hover が無い。**ホバーだけに閉じ込めない。**
+    tips = _re4.findall(r'<span class="hint"([^>]*)>', board32)
+    check("補足の印が置いてある", len(tips) >= 4, "%d箇所" % len(tips))
+    check("補足はキーボードでも開ける（tabindex がある）",
+          all("tabindex" in t for t in tips), "%d箇所" % len(tips))
+    css32 = board32[board32.index("<style>"):board32.index("</style>")]
+    check("ホバーだけでなく focus でも出る",
+          ".hint:focus" in css32 and ".hint:hover" in css32)
+    # 吹き出しの中身が空なら、印は「押しても何も出ないもの」になる
+    bodies = _re4.findall(r'<span class="tip">(.*?)</span>', board32, _re4.S)
+    check("吹き出しに中身がある", bodies and all(len(_re4.sub("<[^>]+>", "", b)) > 20
+                                        for b in bodies), "%d箇所" % len(bodies))
+    # 右端の印は左へ開かないと画面から出る（2026-09-02、実測で3箇所がはみ出した）
+    check("右端用の変種が用意されている", ".hint.tip-right .tip" in css32)
+    check("右端用の変種が実際に使われている", "hint tip-right" in board32)
+    # 同じ用語の印を、同じ節で繰り返さない（カード8枚に同じ印を出していた）
+    labels = _re4.findall(r'aria-label="([^"]+)とは"', board32)
+    dupes = [x for x in set(labels) if labels.count(x) > 2]
+    check("同じ用語の印を繰り返していない", not dupes,
+          "／".join("%s %d回" % (d, labels.count(d)) for d in dupes) or "重複なし")
+
+    check("JavaScriptは1行も無いまま", "<script" not in board32)
+
     print("")
     print("【31】Googleで入る ── 送り出して、戻りを検算する")
     # **部品があることと、動くことは別。** 実際にHTTPで往復させて、入れることまで見る。
@@ -1651,6 +1705,7 @@ def _run(instance):
 
     # 描いていない先があることを画面に書く。**書かない可視化は、いずれ誤読される。**
     board30 = (instance / "out" / "dashboard.html").read_text(encoding="utf-8")
+
     check("在庫の画面が当月だけを描いていると分かる", "当月の在庫" in board30)
     check("この先を描いていない理由が書いてある", "仕入の予定" in board30)
     # 期首は月日だけ描くので、フルの日付で数えると0件で通ってしまう。図の実物を数える。
@@ -1665,6 +1720,25 @@ def _run(instance):
     check("当月と期首より前の日付が混ざっていない", not stray, "余計な日付 %s" % stray[:4])
     check("棚卸の日が図の中で名指しされている", chart.count("日 実測") >= 2,
           "%d箇所" % chart.count("日 実測"))
+
+    # **傾きの理由を、傾きの真下に置く。**
+    # 在庫の線だけでは「仕入れすぎ」と「売れなかった」を言い分けられない。
+    # 2026-09-02、画面を見て「この山は何か」と問われた ── 問われた時点で、画面が
+    # 仕事をしていない。日ごとの出入り（仕入 − 原価）を線の下に添える。
+    check("日ごとの出入りが図に出ている", chart.count('class="flow"') >= len(view["points"]) - 1,
+          "%d本" % chart.count('class="flow"'))
+    # 出入りの符号と、線の傾きが一致していなければ、説明になっていない
+    mismatched = []
+    for a, b in zip(view["points"], view["points"][1:]):
+        if b["settled"]:
+            continue
+        slope = b["amount"] - a["amount"]
+        flow = b["moved_in"] - b["moved_out"]
+        if (slope > 0) != (flow > 0) and abs(slope) > 1.0:
+            mismatched.append(b["date"])
+    check("出入りの向きと、在庫の傾きが一致している", not mismatched, str(mismatched[:3]))
+    check("いちばん積み上がった日が名指しできる", "積み上がった" in board30 or "いちばん" in board30)
+
 
     print("")
     print("【28】名簿 ── 誰かは外が決め、何が見えるかは城が決める")

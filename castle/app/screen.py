@@ -31,6 +31,43 @@ def _change(now, base):
     return None if not base or now is None else (now / base - 1) * 100
 
 
+# 用語の一行説明。**毎日見る人には邪魔、はじめての人には要る。**
+# だから常時は出さず、印にしまう。JavaScriptは使わない（:hover と :focus だけ）。
+TERMS = {
+    "粗利率": "売上に対する粗利の割合。値引きが増えるか、相場が上がると落ちます。"
+            "金額が伸びていても率が落ちていれば、売り方が変わっています。",
+    "人時生産性": "粗利 ÷ 実労働時間。1時間働いていくら粗利を生んだか。"
+                "売上ベースだと、薄利多売の部門が実力以上に見えます。",
+    "労働分配率": "粗利に対する人件費の割合。稼いだ粗利のうち、どれだけを人に配ったか。"
+                "高すぎれば利益が残らず、低すぎれば人が続きません。",
+    "在庫日数": "在庫 ÷ 1日あたりの売上原価。いまの在庫が何日分かを表します。"
+             "短いほど、同じ商売でも寝ている金が少なくて済みます。",
+    "段階利益": "売上から当期純利益まで、利益が一段ずつ削られていく並びのこと。"
+             "どの段で消えたかが分かると、打つ手が決まります。",
+    "運転資本": "売掛金 ＋ 棚卸資産 − 買掛金。商売を回すために立て替えている金です。"
+             "増えるとその分だけ現金が減ります。",
+    "現金が戻ってくるまで": "仕入れた物が現金になって戻るまでの日数（CCC）。"
+                    "売掛の回収 ＋ 在庫の滞留 − 仕入の支払猶予 で出します。",
+    "期首": "その月の始まりの在庫。前月末に締めた在庫がそのまま繰り越されます。",
+}
+
+
+def hint(term, align="center"):
+    """用語の隣に置く印。**ホバーだけに閉じ込めない** ── 触る画面には hover が無いので、
+    tabindex を付けて focus でも開くようにする。
+
+    align="right" は、画面の右端に置く印用。中央から開くと画面の外へ出る
+    ── 2026-09-02、実測で3箇所がはみ出していた（右端 1045px ／ 画面幅 951px）。
+    """
+    text = TERMS.get(term)
+    if not text:
+        return ""
+    return ('<span class="hint%s" tabindex="0" role="note" aria-label="%sとは">'
+            'ⓘ<span class="tip"><b>%s</b><br>%s</span></span>'
+            % (" tip-right" if align == "right" else "",
+               escape(term), escape(term), escape(text)))
+
+
 def freshness(items, today):
     """データの届き具合。**自動にするほど「今日も動いたはず」と思い込む。**
 
@@ -386,7 +423,8 @@ def movement(departments):
                min(mark * v["forecast_gross"] / v["budget"], 100.0) if v["budget"] else 0.0, mark,
                pct(v["vs_budget"]), arrow, pct(v["vs_last_year"]), v["margin"] * 100))
     return ('<table><thead><tr><th class="name">部門</th><th>着地見込み粗利</th>'
-            '<th class="barcell">予算まで</th><th>予算比</th><th>前年比</th><th>粗利率</th>'
+            '<th class="barcell">予算まで</th><th>予算比</th><th>前年比</th>'
+            '<th>粗利率%s</th>' % hint("粗利率", align="right") +
             "</tr></thead><tbody>%s</tbody></table>"
             '<p class="legend">棒は、その部門の予算に対してどこまで来たか。'
             '縦の目印が予算の位置です。▲▼は<b>前年比</b>の向き（±1%%以内は→）。'
@@ -552,7 +590,8 @@ def cash(book):
         ("%s 月末の現預金" % block["as_of"], block["現預金"]["amount"], 0),
         ("当期純利益の見込み", book["ladder"]["net"], 1),
         ("減価償却費（現金は出ていかない）", book["ladder"]["depreciation"], 1),
-        ("運転資本の増加（売掛と在庫に化けた分）", block["working_capital_change"], -1),
+        ("運転資本の増加（売掛と在庫に化けた分）" + hint("運転資本"),
+         block["working_capital_change"], -1),
     ]
     # 内訳を出す。売掛なら回収、在庫なら発注 ── 打つ手が違う。
     WHY = {"売掛金": "回収が遅れた分", "棚卸資産": "在庫に積んだ分", "買掛金": "支払を待ってもらった分"}
@@ -571,7 +610,7 @@ def cash(book):
     return (
         '<div class="breakdown">%s</div>'
         '<div class="cashgrid">'
-        '<div class="panel-box"><h3>現金が戻ってくるまで %.0f日</h3>'
+        '<div class="panel-box"><h3>現金が戻ってくるまで %.0f日%s</h3>' 
         '<div class="legend">売掛の回収 %.1f日 ＋ 在庫の滞留 %.1f日 − 仕入の支払猶予 %.1f日。'
         '<b>短いほど、同じ商売でも手元に金が残ります。</b>（%s 月末の残高で計算）</div></div>'
         '<div class="panel-box"><h3>月末の現預金は %s の見込み</h3>'
@@ -581,7 +620,8 @@ def cash(book):
         '<div class="legend"><b>利益が出ていても現金は増えません。</b>'
         '売掛金と在庫が膨らめば、その分だけ金は寝たままです。</div></div>'
         "</div>"
-        % ("".join(cards), ccc["days"], ccc["receivable_days"], ccc["inventory_days"],
+        % ("".join(cards), ccc["days"], hint("現金が戻ってくるまで"),
+           ccc["receivable_days"], ccc["inventory_days"],
            ccc["payable_days"], ccc["month"], money(block["cash_end_forecast"]),
            steps, money(block["cash_end_forecast"])))
 
@@ -605,13 +645,13 @@ def stock(book):
     return (
         '<div class="breakdown">'
         '<div><div class="k">最後に数えた在庫</div><div class="v">%s</div>'
-        '<div class="n">%s 時点（週次）／ 在庫日数 %.1f日</div></div>'
+        '<div class="n">%s 時点（週次）／ 在庫日数 %.1f日%s</div></div>'
         '<div><div class="k">いまの在庫（想定）</div><div class="v">%s</div>'
         '<div class="n">%s ／ 数えた日から %d営業日ぶん、在庫日数を当てたもの</div></div>'
         '<div><div class="k">在庫日数</div><div class="v">%.1f日</div>'
         '<div class="n">在庫 ÷ 日商原価。短いほど、同じ商売でも金が寝ません</div></div>'
         "</div>"
-        % (money(real["amount"]), last_real, real["days_of_stock"],
+        % (money(real["amount"]), last_real, real["days_of_stock"], hint("在庫日数"),
            money(now["amount"]), days[-1], len(guessed), now["days_of_stock"]))
 
 
@@ -631,7 +671,7 @@ def purchase(book):
            pct(buy["vs_ly"], good_high=False)))
 
 
-def stock_month(view, width=940, height=280, pad=44):
+def stock_month(view, width=940, height=360, pad=44, flow=96):
     """当月の在庫。**期首から始まり、月の中で経過する。**
 
     2ヶ月を1枚に並べない ── 在庫は月ごとに締まるので、
@@ -654,8 +694,10 @@ def stock_month(view, width=940, height=280, pad=44):
     def x_of(i):
         return left + (right - left) * (i / max(count - 1, 1))
 
+    top = height - pad - flow                     # 線の帯の下端（ここから下が出入り）
+
     def y_of(v):
-        return height - pad - (height - pad - 26) * ((v - low) / (high - low))
+        return top - (top - 26) * ((v - low) / (high - low))
 
     cut = max((i for i, p in enumerate(points) if p["settled"]), default=0)
     out = ['<svg viewBox="0 0 %d %d" role="img" aria-label="当月の在庫">' % (width, height)]
@@ -704,6 +746,35 @@ def stock_month(view, width=940, height=280, pad=44):
     for (_, text, color, size, weight), y in zip(tags, _stack(tags, 15.0, 16.0, height - 32)):
         out.append('<text x="%d" y="%.1f" fill="%s" font-size="%d" font-weight="%d">%s</text>'
                    % (right + 8, y + 4, color, size, weight, text))
+
+    # ── 傾きの理由を、傾きの真下に置く ────────────────────
+    #
+    # 在庫の線だけでは「仕入れすぎ」と「売れなかった」を言い分けられない。
+    # その日に **買った分と売れた分の差** を棒で置けば、山の理由が線の下で読める。
+    # 2026-09-02、画面を見て「この山は何か」と問われた ── 問われた時点で、画面の負け。
+    flows = [p["moved_in"] - p["moved_out"] for p in points]
+    scale = max((abs(v) for v in flows), default=1.0) or 1.0
+    zero = top + 30
+    bw = max((right - left) / count * 0.42, 4.0)
+    out.append('<line x1="%.1f" y1="%.1f" x2="%d" y2="%.1f" stroke="var(--line-2)" '
+               'stroke-width="1"/>' % (pad, zero, right, zero))
+    out.append('<text x="%d" y="%.1f" fill="var(--muted)" font-size="10">仕入 − 原価</text>'
+               % (right + 8, zero + 4))
+    peak = max(range(count), key=lambda i: flows[i]) if count else 0
+    for i, p in enumerate(points):
+        v = flows[i]
+        h = abs(v) / scale * (flow - 44)
+        y = zero - h if v >= 0 else zero
+        color = "var(--ok)" if v >= 0 else "var(--warn)"
+        out.append('<rect class="flow" x="%.1f" y="%.1f" width="%.1f" height="%.1f" rx="2" '
+                   'fill="%s" fill-opacity="%s"/>'
+                   % (x_of(i) - bw / 2, y, bw, max(h, 1.5), color,
+                      ".85" if i == peak else ".45"))
+    out.append('<text x="%.1f" y="%.1f" fill="var(--ok)" font-size="10.5" '
+               'text-anchor="middle">いちばん積み上がった日 %s%.0f万円</text>'
+               % (min(max(x_of(peak), 120), right - 90), zero - (abs(flows[peak]) / scale
+                  * (flow - 44)) - 8,
+                  "+" if flows[peak] >= 0 else MINUS, abs(flows[peak]) / 1e4))
 
     for i, p in enumerate(points):
         if i in (0, count - 1) or p["settled"]:

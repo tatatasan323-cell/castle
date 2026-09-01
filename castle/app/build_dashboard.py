@@ -552,6 +552,9 @@ def build(instance, verbose=False, nav=False, scope=None):
                 intake.freshness(conn, cfg),
                 (cfg.sources or {}).get("基準日")
                 or datetime.date.today().isoformat()),
+            hint_ladder=screen.hint("段階利益"),
+            hint_cash=screen.hint("運転資本"),
+            hint_stock=screen.hint("期首"),
             landing=screen.landing(month),
             breakdown=screen.breakdown(month),
             ladder=screen.ladder(book),
@@ -569,9 +572,10 @@ def build(instance, verbose=False, nav=False, scope=None):
             year_view=screen.year_view(year), year_verdict=screen.year_verdict(year),
             **dept_charts)
         howto_block = (PART / "_howto.html").read_text(encoding="utf-8")
-        health_block = ('<section><h2>正常に回っているか</h2>%s</section>'
-                        % screen.health(month, whole["pph"], whole_target,
-                                        whole["vs_target"], build_ranking(results)))
+        health_block = ('<section><h2>正常に回っているか%s</h2>%s</section>'
+                        % (screen.hint("人時生産性"),
+                           screen.health(month, whole["pph"], whole_target,
+                                         whole["vs_target"], build_ranking(results))))
     else:
         company_block = ""
         trend_block = string.Template(

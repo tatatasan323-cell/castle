@@ -100,6 +100,29 @@ table.ladder.small td{padding:7px 10px}
 .freshness tr.late td{color:var(--bad)}
 .stamp{margin-left:10px;padding:2px 8px;border:1px solid var(--line-2);border-radius:99px;
   font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.why{margin:10px 0 0}
+.why>summary{cursor:pointer;color:var(--muted);font-size:12px;letter-spacing:.03em;
+  list-style:none;display:inline-block;padding:3px 10px;border:1px solid var(--line);
+  border-radius:99px}
+.why>summary::-webkit-details-marker{display:none}
+.why>summary:hover{color:var(--accent);border-color:var(--line-2)}
+.why[open]>summary{margin-bottom:8px}
+.why p{margin:8px 0 0}
+
+/* 補足の印。JavaScriptは使わず、:hover と :focus だけで出す。
+   触る画面には hover が無いので、tabindex を付けて focus でも開くようにする
+   ── ホバーだけに閉じ込めると、スマホで永久に読めない情報ができる。 */
+.hint{position:relative;display:inline-block;margin-left:5px;width:15px;height:15px;
+  line-height:15px;text-align:center;border-radius:50%;border:1px solid var(--line-2);
+  color:var(--muted);font-size:10.5px;cursor:help;vertical-align:middle;outline:none}
+.hint:hover,.hint:focus{color:var(--accent);border-color:var(--accent)}
+.hint .tip{display:none;position:absolute;left:50%;bottom:22px;transform:translateX(-50%);
+  width:270px;padding:11px 13px;background:var(--card-2);border:1px solid var(--line-2);
+  border-radius:10px;box-shadow:0 12px 30px rgba(0,0,0,.6);color:var(--ink);
+  font-size:12px;line-height:1.75;text-align:left;z-index:20;cursor:auto;white-space:normal}
+.hint:hover .tip,.hint:focus .tip{display:block}
+/* 右端に置く印は左へ開く。中央から開くと画面の外へ出る（実測で確認） */
+.hint.tip-right .tip{left:auto;right:-8px;transform:none}
 .panel{display:none}
 #ch-total:checked~#p-total,#ch-amount:checked~#p-amount,
 #ch-rate:checked~#p-rate,#ch-year:checked~#p-year{display:block}
