@@ -398,6 +398,86 @@ def year_verdict(year):
     return "".join(bits)
 
 
+def closing(gap, board):
+    """足りない分を、どう埋めるか。**社長の3つ目の問いはこれ。**
+
+    診断で終わる画面は、読んだあとに何も起きない。だから
+    「いくら足りないか」「何をどれだけ動かせば埋まるか」「打ち手は仕込まれているか」
+    「その見込みでいくら埋まるか」まで、1つの節に並べる。
+
+    **期限が過ぎて動いていない打ち手は、赤で名指しして見込みから外す。**
+    それを足して着地を語れば、粉飾と同じ形になる。
+    """
+    if not gap:
+        return ""
+    short, planned = gap["year"]["short"], board["planned"]
+    if short > 0:
+        head = ('年間予算まで <b class="bad">あと %s</b>' % money(short))
+        rest = ("打ち手で <b>%s</b> ぶん見込んでいます。<b class=\"%s\">残り %s</b>"
+                % (money(planned), "bad" if board["uncovered"] > 0 else "ok",
+                   money(board["uncovered"]) if board["uncovered"] > 0 else "足ります"))
+    else:
+        head = ('年間予算に対して <b class="ok">%s の余裕</b>' % money(-short))
+        rest = ("薄い余裕です。打ち手が効けば <b>%s</b> まで厚くなります。"
+                % money(-short + planned))
+
+    cards = [
+        '<div><div class="k">年間予算まで</div><div class="v %s">%s</div>'
+        '<div class="n">着地 %s ／ 予算 %s</div></div>'
+        % ("bad" if short > 0 else "ok",
+           money(abs(short)) + ("" if short > 0 else " 余裕"),
+           money(gap["year"]["forecast"]), money(gap["year"]["budget"])),
+        '<div><div class="k">打ち手の見込み</div><div class="v">%s</div>'
+        '<div class="n">%d件（これから効くもの。当月の不足は %s）</div></div>'
+        % (money(planned), len(board["counted"]), money(gap["month"]["short"])),
+        '<div><div class="k">効いた実績</div><div class="v ok">%s</div>'
+        '<div class="n">%d件。<b>もう数字に出ているので、見込みには足しません</b></div></div>'
+        % (money(board["landed"]), board["by_state"]["効いた"]),
+    ]
+
+    # レバー。**判断の材料は機械が出し、判断は人がする。**
+    rows = []
+    for lever in gap["levers"]:
+        rows.append('<tr><td class="name">%s を %s</td><td class="v">%s</td>'
+                    "<td>%s</td></tr>"
+                    % (escape(lever["name"]), escape(lever["step"]),
+                       money(lever["amount"]), escape(lever["note"])))
+    levers = ('<table><thead><tr><th class="name">動かすもの</th>'
+              "<th>営業利益への効き目</th><th>中身</th></tr></thead>"
+              "<tbody>%s</tbody></table>"
+              '<p class="legend">残り%dヶ月ぶんの効き目です。'
+              "<b>どれが現実的かを決めるのは人</b>で、機械はここまでしか言えません。</p>"
+              % ("".join(rows), gap["remaining"]["months"]))
+
+    # 打ち手の一覧。悪い順（期限切れが上）
+    order = sorted(board["rows"], key=lambda r: (not r["overdue"], r["due"]))
+    moves = []
+    for r in order:
+        klass = ' class="worst"' if r["overdue"] else ""
+        state = ('<b class="bad">期限が過ぎています</b>' if r["overdue"]
+                 else escape(r["state"]))
+        moves.append(
+            "<tr%s><td class=\"name\">%s</td><td>%s</td><td class=\"v\">%s</td>"
+            "<td>%s</td><td>%s</td><td class=\"note\">%s</td></tr>"
+            % (klass, escape(r["subject"]), escape(r["lever"]), money(r["expect"]),
+               escape(r["due"]), state, escape(r["text"])))
+    table = ('<table><thead><tr><th class="name">部門</th><th>動かすもの</th>'
+             "<th>見込み</th><th>期限</th><th>状態</th><th>何をするか</th>"
+             "</tr></thead><tbody>%s</tbody></table>" % "".join(moves)) if moves else (
+        '<div class="none">打ち手がまだ1件も登録されていません。'
+        "<b>足りない分は、誰かが動かなければ埋まりません。</b></div>")
+
+    late = ""
+    if board["overdue"]:
+        late = ('<p class="verdict"><b class="bad">期限が過ぎて動いていない打ち手が %d件</b>'
+                "あります（見込みからは外してあります）。"
+                "<b>打ったつもりのまま残るのが、この台帳のいちばんの腐り方です。</b></p>"
+                % len(board["overdue"]))
+
+    return ('<p class="verdict">%s。%s</p><div class="breakdown">%s</div>%s%s%s'
+            % (head, rest, "".join(cards), levers, late, table))
+
+
 def movement(departments):
     """悪い順に並べる。経営者が最初に見たいのは、落ちているほうだから。
 
@@ -426,9 +506,11 @@ def movement(departments):
             '<th class="barcell">予算まで</th><th>予算比</th><th>前年比</th>'
             '<th>粗利率%s</th>' % hint("粗利率", align="right") +
             "</tr></thead><tbody>%s</tbody></table>"
+            '<details class="why"><summary>この表の読み方</summary>'
             '<p class="legend">棒は、その部門の予算に対してどこまで来たか。'
             '縦の目印が予算の位置です。▲▼は<b>前年比</b>の向き（±1%%以内は→）。'
-            "予算比の悪い順に並べています ── 経営者が最初に見たいのは落ちているほうなので。</p>"
+            "予算比の悪い順に並べています ── 経営者が最初に見たいのは落ちているほうなので。"
+            "</p></details>"
             % "".join(rows))
 
 

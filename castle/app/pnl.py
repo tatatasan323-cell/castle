@@ -462,6 +462,72 @@ def fiscal_months(start_month, anchor):
     return out
 
 
+def gap(conn, cfg, yoy_offset=364):
+    """**足りない分と、それを埋めるレバー。**
+
+    社長の3つ目の問いは「どこで消えたか」ではない ── 「で、どうする」である。
+    診断で終わる画面は、読んだあとに何も起きない。
+
+    営業利益の不足は、次の4つでしか埋まらない。
+
+        売上を増やす ／ 粗利率を上げる ／ 人件費を下げる ／ その他販管費を下げる
+
+    どれを何%動かせば足りるかは計算できる。**計算するのは機械、決めるのは人。**
+    「粗利率を0.03pt上げれば届く」と分かって初めて、その打ち手が現実的かを人が判じられる。
+    """
+    book = build(conn, cfg, yoy_offset)
+    year = build_year(conn, cfg, yoy_offset)
+    month = book["month"]
+    if month is None or year is None:
+        return None
+
+    ahead = [m for m in year["this_year"]["months"] if m["state"] != "確定"]
+    rest = {
+        "months": len(ahead),
+        "sales": sum(m["sales"] for m in ahead),
+        "gross": sum(m["gross"] for m in ahead),
+        "labor": sum(m["labor"] for m in ahead),
+        "sga": sum(m["sga"] for m in ahead),
+        "op": sum(m["op"] for m in ahead),
+    }
+    month_short = (month["budget"] or 0.0) - month["forecast_op"]
+    year_short = (year["budget"] or 0.0) - year["this_year"]["op"]
+
+    # 1目盛りあたり、営業利益がいくら動くか。**目盛りは実務で動かせる粒度に取る。**
+    # 粗利率を1pt動かす打ち手は現実には無い（0.1ptでも大仕事）。
+    steps = [
+        ("売上", "+1%", rest["gross"] * 0.01,
+         "残り%dヶ月の売上を1%%増やす（粗利率はいまのまま）" % rest["months"]),
+        ("粗利率", "+0.1pt", rest["sales"] * 0.001,
+         "値入れ・仕入交渉・構成の入れ替えで、粗利率を0.1pt上げる"),
+        ("人件費", "−1%", rest["labor"] * 0.01,
+         "人時か人時単価を1%下げる（シフト・残業・配置）"),
+        ("その他販管費", "−1%", rest["sga"] * 0.01,
+         "配送・販促・通信などを1%下げる"),
+    ]
+    levers = []
+    for name, step, amount, note in steps:
+        # 不足を埋めるには、この目盛りを何倍動かす必要があるか
+        needed = None
+        if year_short > 0 and amount > 0:
+            times = year_short / amount
+            unit = step.lstrip("+−-")
+            value = float(unit.rstrip("%pt")) * times
+            needed = ("+%.2fpt" % value) if "pt" in unit else (
+                ("%s%.2f%%" % (step[0], value)) if step[0] in "+−" else "%.2f%%" % value)
+        levers.append({"name": name, "step": step, "amount": amount,
+                       "note": note, "needed": needed})
+
+    return {
+        "month": {"month": month["month"], "budget": month["budget"] or 0.0,
+                  "forecast": month["forecast_op"], "short": month_short},
+        "year": {"label": year["this_year"]["label"], "budget": year["budget"] or 0.0,
+                 "forecast": year["this_year"]["op"], "short": year_short},
+        "remaining": rest,
+        "levers": levers,
+    }
+
+
 def build_year(conn, cfg, yoy_offset=364):
     """事業年度の視点。**会社の損益は月ごとに確定し、年間へ積み上がる。**
 

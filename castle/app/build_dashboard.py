@@ -24,6 +24,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import config as config_mod
 import db
 import intake
+import actions
 import knowledge
 import pnl
 import screen
@@ -555,6 +556,8 @@ def build(instance, verbose=False, nav=False, scope=None):
             hint_ladder=screen.hint("段階利益"),
             hint_cash=screen.hint("運転資本"),
             hint_stock=screen.hint("期首"),
+            closing=screen.closing(pnl.gap(conn, cfg, metric["yoy_offset_days"]),
+                                   actions.board(conn, cfg, scope=scope)),
             landing=screen.landing(month),
             breakdown=screen.breakdown(month),
             ladder=screen.ladder(book),

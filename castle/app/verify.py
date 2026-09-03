@@ -1285,7 +1285,9 @@ def _run(instance):
     pairs, checked = [], 0
 
     # 言い切った言葉と、実際の差が合っているか。**誤差圏と大きな未達を同じ語で呼ばない。**
-    verdict = _re3.search(r'<p class="verdict">(.*?)</p>', board3, _re3.S).group(1)
+    # 節が増えたので、文書の先頭から探すと別の節の判定文を拾う。年間のタブの中を見る。
+    panel = board3[board3.index('id="p-year"'):]
+    verdict = _re3.search(r'<p class="verdict">(.*?)</p>', panel, _re3.S).group(1)
     gap_rate = (year["this_year"]["op"] / year["budget"] - 1) * 100
     said_ok = "届く見通し" in verdict
     said_ng = "届かない見通し" in verdict
@@ -1479,6 +1481,126 @@ def _run(instance):
 
 
 
+
+
+    print("")
+    print("【33】3つ目の問い ── 足りない分を、どう埋めるか")
+    # 社長の3つ目の問いは「どこで消えたか」ではない。**「で、どうする」**である。
+    #   いくら足りないか／何をどれだけ動かせば埋まるか／打ち手は仕込まれているか
+    #   ／その見込みでいくら埋まるか
+    # 診断で終わる画面は、読んだあとに何も起きない。
+    import actions
+
+    gap = pnl.gap(conn, cfg)
+    check("いくら足りないかが出る", gap is not None)
+    check("当月の不足が予算と着地の差になっている",
+          abs(gap["month"]["short"] - (gap["month"]["budget"] - gap["month"]["forecast"])) < 1.0,
+          "予算 %.0f − 着地 %.0f" % (gap["month"]["budget"], gap["month"]["forecast"]))
+    check("年間の過不足も出る", "year" in gap and "short" in gap["year"],
+          "年間 %.0f円" % gap["year"]["short"])
+
+    # **何をどれだけ動かせば埋まるか。** 判断は人がするが、材料は機械が出す。
+    levers = {l["name"]: l for l in gap["levers"]}
+    check("レバーが4本そろっている",
+          set(levers) == {"売上", "粗利率", "人件費", "その他販管費"}, str(sorted(levers)))
+    check("レバーの効き目が正の額で出ている",
+          all(l["amount"] > 0 for l in gap["levers"]),
+          "／".join("%s %.0f" % (k, v["amount"]) for k, v in levers.items()))
+    # 検算：粗利率を0.1pt上げれば、残り期間の売上 × 0.1% ぶん営業利益が増える
+    check("粗利率のレバーが、残り期間の売上と一致している",
+          abs(levers["粗利率"]["amount"] - gap["remaining"]["sales"] * 0.001) < 1.0,
+          "%.0f ／ %.0f" % (levers["粗利率"]["amount"], gap["remaining"]["sales"] * 0.001))
+    check("人件費のレバーが、残り期間の人件費と一致している",
+          abs(levers["人件費"]["amount"] - gap["remaining"]["labor"] * 0.01) < 1.0)
+    check("不足を埋めるのに必要な動かし幅が出ている",
+          all("needed" in l for l in gap["levers"]),
+          "／".join("%s %s" % (k, v.get("needed")) for k, v in levers.items()))
+
+    # ── 打ち手 ──────────────────────────────────────────
+    mark33 = conn.execute("SELECT COALESCE(MAX(id),0) FROM records").fetchone()[0]
+    ok33, msg33 = actions.add(conn, cfg, {
+        "subject": "農産部", "lever": "粗利率", "expect": 4_000_000,
+        "due": "2026-10-31", "owner": "農産課 佐藤",
+        "text": "赤字取引を上位20件まで洗い出し、値上げ交渉か取引停止を部門長と決める。"})
+    conn.commit()
+    check("打ち手を登録できる", ok33, msg33)
+
+    bad33 = [
+        ("部門が対応表にない", {"subject": "存在しない部", "lever": "売上", "expect": 1e6,
+                            "due": "2026-10-31", "owner": "誰か", "text": "なにか"}),
+        ("レバーが一覧にない", {"subject": "農産部", "lever": "気合", "expect": 1e6,
+                           "due": "2026-10-31", "owner": "誰か", "text": "なにか"}),
+        ("見込み額がゼロ", {"subject": "農産部", "lever": "売上", "expect": 0,
+                        "due": "2026-10-31", "owner": "誰か", "text": "なにか"}),
+        ("期限が読めない", {"subject": "農産部", "lever": "売上", "expect": 1e6,
+                        "due": "そのうち", "owner": "誰か", "text": "なにか"}),
+        ("何をするかが空", {"subject": "農産部", "lever": "売上", "expect": 1e6,
+                        "due": "2026-10-31", "owner": "誰か", "text": "   "}),
+    ]
+    for label, payload in bad33:
+        got33, why33 = actions.add(conn, cfg, payload)
+        check("打ち手を拒否する（%s）" % label, not got33, why33)
+
+    # **見込みだけ積んでも埋まらない。** ギャップとの引き算まで出す。
+    board = actions.board(conn, cfg)
+    check("打ち手の見込み合計が出る", board["planned"] >= 4_000_000,
+          "%.0f円" % board["planned"])
+    check("まだ埋まっていない額が出る", "uncovered" in board,
+          "%.0f円" % board["uncovered"])
+    check("まだ埋まっていない額が、不足 − 見込みになっている",
+          abs(board["uncovered"] - max(gap["year"]["short"] - board["planned"], 0.0)) < 1.0,
+          "不足 %.0f − 見込み %.0f" % (gap["year"]["short"], board["planned"]))
+
+    # **打ったつもりを許さない。** 期限が過ぎて動いていない打ち手は名指しする。
+    ok33b, _ = actions.add(conn, cfg, {
+        "subject": "水産部", "lever": "人件費", "expect": 2_000_000,
+        "due": "2026-08-01", "owner": "水産課 高橋",
+        "text": "夜間のシフトを1名減らし、翌朝へ寄せる。"})
+    conn.commit()
+    board2 = actions.board(conn, cfg)
+    # デモにも期限切れが1件あるので、絶対数ではなく増えたぶんで見る
+    check("期限が過ぎた打ち手が名指しされる",
+          len(board2["overdue"]) == len(board["overdue"]) + 1,
+          "%d件 → %d件" % (len(board["overdue"]), len(board2["overdue"])))
+    check("期限切れは見込みから外れている", board2["planned"] < board["planned"] + 2_000_000,
+          "%.0f円" % board2["planned"])
+
+    # 効かなかったと分かった打ち手も、見込みから外す
+    # ORDER BY を書かないと、索引の都合で逆順に返る（2026-09-02、実際に逆で返った）
+    made33 = [r["id"] for r in conn.execute(
+        "SELECT id FROM records WHERE kind='打ち手' AND id > ? ORDER BY id", (mark33,))]
+    actions.advance(conn, made33[0], "効かなかった")
+    conn.commit()
+    board3 = actions.board(conn, cfg)
+    check("効かなかった打ち手は見込みから外れる", board3["planned"] < board2["planned"],
+          "%.0f円 → %.0f円" % (board2["planned"], board3["planned"]))
+    # 効いたものの効果は、もう実績の側に出ている。**見込みにも足すと二重になる。**
+    actions.advance(conn, made33[1], "効いた", 3_000_000)
+    conn.commit()
+    board4 = actions.board(conn, cfg)
+    check("効いた打ち手を見込みに二重に数えない",
+          board4["planned"] == board3["planned"] and board4["landed"] >= 3_000_000,
+          "見込み %.0f ／ 効いた実績 %.0f" % (board4["planned"], board4["landed"]))
+    check("状態は一覧のものしか受け付けない",
+          not actions.advance(conn, made33[0], "たぶん効いた")[0])
+
+    # 画面
+    import build_dashboard as _bd
+    _bd.build(instance)
+    board33 = (instance / "out" / "dashboard.html").read_text(encoding="utf-8")
+    check("3つ目の問いが「どう埋めるか」になっている", "どう埋めるか" in board33)
+    check("レバーの効き目が画面に出ている", "粗利率を" in board33 and "上げる" in board33)
+    check("打ち手が画面に出ている", "赤字取引を上位20件" in board33)
+    check("期限切れが画面で名指しされている", "期限が過ぎ" in board33)
+    # **消したのではない。** 金の巡りは残っている
+    check("CCCは金の巡りの節に残っている", "現金が戻ってくるまで" in board33)
+
+    for row_id in made33:
+        conn.execute("DELETE FROM records WHERE id=?", (row_id,))
+    conn.commit()
+    check("検査で入れた打ち手を片付けた",
+          conn.execute("SELECT COUNT(*) FROM records WHERE kind='打ち手' AND id > ?",
+                       (mark33,)).fetchone()[0] == 0)
 
     print("")
     print("【32】常時見えるのは数字。解説は、要るときだけ出す")
