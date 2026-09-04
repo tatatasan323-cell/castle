@@ -67,6 +67,32 @@ TERMS = {
 }
 
 
+# 画面は4つ。**どこからでも、他の3つへ行ける。**
+PAGES = (("/", "経営ステータス"), ("/note", "申し送り"),
+         ("/knowledge", "知識の泉"), ("/guide", "使い方"))
+
+
+def nav(current="/", logout=False):
+    """画面の行き来。**全部の画面に、同じものを置く。**
+
+    どこかの画面でタブが消えると、そこから戻れなくなる
+    ── 2026-09-05、申し送りにはタブ自体が無く、使い方は1本しか無かった。
+    同じ並びを3箇所に書き分けていたのが原因なので、ここ1つに集約する。
+
+    **気づけないタブは、無いのと同じ。** 本文より小さい飾り文字にしない。
+    いまどこにいるかは、色ではなく塗りで示す（色だけだと見分けにくい人がいる）。
+    """
+    tabs = []
+    for href, label in PAGES:
+        here = href == current
+        tabs.append('<a class="tab%s" href="%s"%s>%s</a>'
+                    % (" here" if here else "", href,
+                       ' aria-current="page"' if here else "", label))
+    if logout:
+        tabs.append('<a class="tab quit" href="/logout">閉じる</a>')
+    return "".join(tabs)
+
+
 def hint(term, align="center"):
     """用語の隣に置く印。**ホバーだけに閉じ込めない** ── 触る画面には hover が無いので、
     tabindex を付けて focus でも開くようにする。
@@ -631,7 +657,11 @@ def ladder(book):
             head = "" if subtotal else ("＋" if step["sign"] > 0 else "−")
             return head + money(value)
 
-        cls = "sub" if step["sign"] == 0 else "adj"
+        # **利益の段が埋もれないようにする。** 起点（売上高）と小計（各利益）は
+        # 加減項目と同じ見た目にしない ── 段を目で追えることが、この表の全部なので。
+        cls = "sub" if subtotal else "adj"
+        if index == 0:
+            cls += " head"
         if step["label"] == "当期純利益":
             cls += " last"
         # 法人税は「減れば良い」ではない ── 利益が減れば税も減る。色を付けない。
@@ -708,8 +738,8 @@ def cash(book):
         '<div class="breakdown">%s</div>'
         '<div class="cashgrid">'
         '<div class="panel-box"><h3>現金が戻ってくるまで %.0f日%s</h3>' 
-        '<div class="legend">売掛の回収 %.1f日 ＋ 在庫の滞留 %.1f日 − 仕入の支払猶予 %.1f日。'
-        '<b>短いほど、同じ商売でも手元に金が残ります。</b>（%s 月末の残高で計算）</div></div>'
+        '<div class="legend">売掛の回収 %.1f日 ＋ 在庫の滞留 %.1f日 − 仕入の支払猶予 %.1f日'
+        '<span class="asof">（%s 月末の残高）</span></div></div>'
         '<div class="panel-box"><h3>月末の現預金は %s の見込み</h3>'
         '<table class="ladder small"><tbody>%s'
         '<tr class="sub last"><td class="name">当月末の現預金（見込み）</td><td class="v">%s</td></tr>'
@@ -746,7 +776,7 @@ def stock(book):
         '<div><div class="k">いまの在庫（想定）</div><div class="v">%s</div>'
         '<div class="n">%s ／ 数えた日から %d営業日ぶん、在庫日数を当てたもの</div></div>'
         '<div><div class="k">在庫日数</div><div class="v">%.1f日</div>'
-        '<div class="n">在庫 ÷ 日商原価。短いほど、同じ商売でも金が寝ません</div></div>'
+        '<div class="n">在庫 ÷ 日商原価</div></div>'
         "</div>"
         % (money(real["amount"]), last_real, real["days_of_stock"], hint("在庫日数"),
            money(now["amount"]), days[-1], len(guessed), now["days_of_stock"]))

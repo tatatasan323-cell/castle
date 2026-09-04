@@ -39,6 +39,7 @@ import config as config_mod
 import db
 import knowledge
 import promote
+import screen
 import oidc
 import sessions
 import users
@@ -174,8 +175,7 @@ def render_guide_page(cfg, identity):
 
     そのかわり、この画面には会社の数字を一切出さない。
     """
-    nav = ('<a href="/">ダッシュボード</a><a href="/note">申し送りを書く</a>'
-           '<b>使い方</b><a href="/logout">閉じる</a>') if identity else '<a href="/">城を開く</a><b>使い方</b>'
+    nav = screen.nav("/guide", logout=bool(identity))
     return string.Template(GUIDE_TEMPLATE.read_text(encoding="utf-8")).substitute(
         theme=theme(),
         company=html.escape(cfg.company), nav=nav)
@@ -286,8 +286,7 @@ def render_knowledge_page(conn, cfg, identity, params=None, message="", scope=No
                     if identity else
                     '<input type="text" id="k_author" name="author" maxlength="30" required>')
 
-    nav = ('<a href="/">ダッシュボード</a><a href="/note">申し送りを書く</a>'
-           '<b>知識の泉</b><a href="/guide">使い方</a><a href="/logout">閉じる</a>')
+    nav = screen.nav("/knowledge", logout=True)
 
     return string.Template(KNOWLEDGE_TEMPLATE.read_text(encoding="utf-8")).substitute(
         theme=theme(),
@@ -348,7 +347,7 @@ def render_note_page(instance, conn, cfg, message="", author="", default_day="",
                         % (html.escape(author), MAX_AUTHOR))
 
     return string.Template(NOTE_TEMPLATE.read_text(encoding="utf-8")).substitute(
-        theme=theme(),
+        theme=theme(), nav=screen.nav("/note", logout=bool(identity)),
         company=html.escape(cfg.company),
         message=message,
         today=html.escape(default_day or latest_data_day(conn)),

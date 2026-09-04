@@ -1602,6 +1602,81 @@ def _run(instance):
           conn.execute("SELECT COUNT(*) FROM records WHERE kind='打ち手' AND id > ?",
                        (mark33,)).fetchone()[0] == 0)
 
+
+
+    print("")
+    print("【35】説明が、画面に追いついているか")
+    oidc_ready35 = bool((cfg.auth or {}).get("client_id"))
+    board32 = (instance / "out" / "dashboard.html").read_text(encoding="utf-8")
+    # **画面を変えたら、説明も変わっていなければならない。**
+    # 説明は画面と別のファイルにあるので、直し忘れても何も起きない ──
+    # 気づくのは、古い説明を読んだ人が迷ったときになる。だから機械に見させる。
+    # 2026-09-05、3つ目の問い（打ち手）も年間の着地も、読み方に一行も無かった。
+    howto35 = (db.ROOT / "castle" / "templates" / "_howto.html").read_text(encoding="utf-8")
+    guide35 = (db.ROOT / "castle" / "templates" / "guide.html").read_text(encoding="utf-8")
+    both35 = howto35 + guide35
+
+    # 画面の節ぜんぶに、説明のどこかで触れている
+    section_words = {
+        "着地の見通し": ("年間", "着地"),
+        "順調に儲かっているか": ("利益の階段", "段階利益"),
+        "金は回るか": ("現金", "運転資本"),
+        "足りない分を、どう埋めるか": ("打ち手", "レバー"),
+        "仕入と在庫": ("在庫", "期首"),
+        "いま手を打つこと": ("要対処", "傾向"),
+        "現場からの申し送り": ("申し送り",),
+    }
+    for section, words in section_words.items():
+        if section not in board32:
+            continue
+        missing = [w for w in words if w not in both35]
+        check("「%s」の読み方がある" % section, not missing, "触れていない語: %s" % missing)
+
+    # 消した仕組みの説明が残っていないか（読み手はそれを探して迷う）
+    gone = [w for w in ("移動平均", "在庫日数を当てた", "どこで消えたか") if w in both35]
+    check("消した仕組みの説明が残っていない", not gone, "残り: %s" % gone)
+
+    # 画面の言葉と、説明の言葉が揃っているか
+    check("画面の呼び名で説明している（タブ名と一致）",
+          "経営ステータス" in guide35,
+          "使い方が「経営ステータス」と呼んでいる")
+    check("入り方の説明が、いまの入口と合っている",
+          ("Google" in guide35) == oidc_ready35,
+          "Googleの口=%s ／ 説明=%s" % (oidc_ready35, "Google" in guide35))
+
+    print("")
+    print("【34】画面の行き来 ── どこからでも、どこへでも戻れるか")
+    # **どこかの画面でタブが消えると、そこから戻れなくなる。**
+    # 2026-09-05、申し送りと使い方にタブが1本しか無く（申し送りにはナビ自体が無く）、
+    # 選んだ瞬間に他の画面への入口が消えていた。
+    import re as _re5
+
+    pages = {"index.html": "経営ステータス", "note.html": "申し送り",
+             "knowledge.html": "知識の泉", "guide.html": "使い方"}
+    out34 = instance.parent / "docs"
+    for name in pages:
+        page = (out34 / name).read_text(encoding="utf-8")
+        check("%s にタブがある" % name, "<nav" in page)
+        others = [f for f in pages if f != name]
+        missing = [f for f in others if ('href="%s"' % f) not in page]
+        check("%s から他の3画面へ行ける" % name, not missing, "行けない: %s" % missing)
+        here = _re5.search(r'aria-current="page"[^>]*>([^<]+)<', page) or \
+            _re5.search(r'<[^>]*aria-current="page"[^>]*>\s*([^<]+)', page)
+        check("%s が「いまここ」を示している" % name,
+              here is not None and pages[name] in here.group(1),
+              here.group(1).strip() if here else "印なし")
+
+    # **気づけないタブは、無いのと同じ。** 本文より小さい飾り文字にしない。
+    css34 = (out34 / "index.html").read_text(encoding="utf-8")
+    css34 = css34[css34.index("<style>"):css34.index("</style>")]
+    # タブは nav から大きさを継承する。個別指定（「閉じる」の小文字）を拾わないよう、
+    # 束ねている nav 側を見る。
+    size = _re5.search(r"^nav\{[^}]*font-size:([\d.]+)px", css34, _re5.S | _re5.M)
+    check("タブの文字が本文と同じかそれ以上", size is not None and float(size.group(1)) >= 13.5,
+          "%spx" % (size.group(1) if size else "指定なし"))
+    check("タブに枠か背景が付いている（押せる物に見える）",
+          _re5.search(r"^nav a\.tab\{[^}]*(border|background)", css34, _re5.S | _re5.M) is not None)
+
     print("")
     print("【32】常時見えるのは数字。解説は、要るときだけ出す")
     # **毎日見る人には、解説は邪魔になる。** はじめての人には要る。

@@ -59,14 +59,29 @@ body{
 
 .wrap{max-width:1040px;margin:0 auto;padding:26px 22px 72px}
 
+/* 画面の行き来。**押せる物に見えなければ、そこにあることに気づけない。**
+   飾り文字のままだと、タブがあると分からず戻れなくなる。 */
 nav{
-  display:flex;gap:18px;font-size:12.5px;letter-spacing:.03em;
-  padding-bottom:13px;margin-bottom:20px;
-  border-bottom:1px solid var(--line);
+  display:flex;gap:8px;flex-wrap:wrap;font-size:13.5px;letter-spacing:.02em;
+  padding-bottom:0;margin-bottom:24px;
+  border-bottom:1px solid var(--line-2);
 }
-nav a{color:var(--muted);text-decoration:none;transition:color .18s,text-shadow .18s}
-nav a:hover{color:var(--accent);text-shadow:var(--glow)}
-nav b{color:var(--accent);font-weight:600;text-shadow:var(--glow)}
+nav a.tab{
+  color:var(--muted);text-decoration:none;padding:9px 18px;
+  border:1px solid var(--line);border-bottom:none;
+  border-radius:10px 10px 0 0;margin-bottom:-1px;
+  background:rgba(10,20,30,.45);transition:color .18s,background .18s,border-color .18s;
+}
+nav a.tab:hover{color:var(--accent);border-color:var(--line-2);
+  background:rgba(20,40,56,.7)}
+/* いまどこにいるか。**色だけでなく塗りと縁で示す。** */
+nav a.tab.here{
+  color:var(--ink);font-weight:600;cursor:default;
+  background:var(--card-2);border-color:var(--line-2);
+  box-shadow:inset 0 2px 0 var(--accent);
+}
+nav a.tab.quit{margin-left:auto;border:none;background:none;font-size:12px;
+  align-self:center;padding:9px 4px}
 
 .eyebrow{color:var(--muted);font-size:12px;letter-spacing:.14em}
 h1{font-size:23px;font-weight:600;margin:4px 0 4px;letter-spacing:.06em}
@@ -201,11 +216,13 @@ a{color:var(--bar)}
 <body>
 <div class="wrap">
 
+<nav><a class="tab" href="index.html">経営ステータス</a><a class="tab here" href="note.html" aria-current="page">申し送り</a><a class="tab" href="knowledge.html">知識の泉</a><a class="tab" href="guide.html">使い方</a></nav>
+
 <div class="eyebrow">架空食品商事株式会社</div>
 <h1>申し送り</h1><div class="notice"><b>これは読むだけの見本です。</b>サーバが動いていないので、書き込みはできません（入力欄は押せなくしてあります）。実際に動かすと、ここから申し送りと知識が書けます ── <a href="https://github.com/tatatasan323-cell/castle">リポジトリ</a>を取得して <code>python castle/app/serve.py</code> で開きます。</div>
 <div class="lead">
   ダッシュボードは「どこが落ちたか」までしか出せません。<b>「なぜ」は現場にしかありません。</b><br>
-  ここに書いたものが、そのまま同じ画面に並びます。 ／ <a href="index.html">ダッシュボードへ戻る</a>
+  ここに書いたものが、そのまま同じ画面に並びます。
 </div>
 
 

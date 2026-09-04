@@ -38,11 +38,7 @@ PART = db.ROOT / "castle" / "templates"
 # 凡例の日数と、実際の窓を1か所から出す。別々に書くと必ず食い違う。
 
 # サーバ配信のときだけ出す。単体ファイルとして配ったときにリンク切れを作らないため。
-NAV = ('<nav><b>経営ステータス</b>'
-       '<a href="/note">申し送りを書く</a>'
-       '<a href="/knowledge">知識の泉</a>'
-       '<a href="/guide">使い方</a>'
-       '<a href="/logout">閉じる</a></nav>')
+# ナビは screen.nav に集約した。同じ並びを書き分けると、片方だけ欠ける。
 
 
 # ---------------------------------------------------------------- 集計
@@ -646,7 +642,7 @@ def build(instance, verbose=False, nav=False, scope=None):
         stamp=datetime.datetime.now().strftime("%Y%m%d-%H%M"),
         last_actual=month["last_actual_date"],
         actual_days=month["actual_days"], remaining_days=month["remaining_days"],
-        nav=(NAV if nav else ""),
+        nav=('<nav>%s</nav>' % screen.nav("/", logout=True)) if nav else "",
         notice=(LIMITED % "・".join(sorted(scope)) + notice) if scope is not None else notice,
         company_block=company_block,
         trend_block=trend_block,

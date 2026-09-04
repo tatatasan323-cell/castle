@@ -59,14 +59,29 @@ body{
 
 .wrap{max-width:1040px;margin:0 auto;padding:26px 22px 72px}
 
+/* 画面の行き来。**押せる物に見えなければ、そこにあることに気づけない。**
+   飾り文字のままだと、タブがあると分からず戻れなくなる。 */
 nav{
-  display:flex;gap:18px;font-size:12.5px;letter-spacing:.03em;
-  padding-bottom:13px;margin-bottom:20px;
-  border-bottom:1px solid var(--line);
+  display:flex;gap:8px;flex-wrap:wrap;font-size:13.5px;letter-spacing:.02em;
+  padding-bottom:0;margin-bottom:24px;
+  border-bottom:1px solid var(--line-2);
 }
-nav a{color:var(--muted);text-decoration:none;transition:color .18s,text-shadow .18s}
-nav a:hover{color:var(--accent);text-shadow:var(--glow)}
-nav b{color:var(--accent);font-weight:600;text-shadow:var(--glow)}
+nav a.tab{
+  color:var(--muted);text-decoration:none;padding:9px 18px;
+  border:1px solid var(--line);border-bottom:none;
+  border-radius:10px 10px 0 0;margin-bottom:-1px;
+  background:rgba(10,20,30,.45);transition:color .18s,background .18s,border-color .18s;
+}
+nav a.tab:hover{color:var(--accent);border-color:var(--line-2);
+  background:rgba(20,40,56,.7)}
+/* いまどこにいるか。**色だけでなく塗りと縁で示す。** */
+nav a.tab.here{
+  color:var(--ink);font-weight:600;cursor:default;
+  background:var(--card-2);border-color:var(--line-2);
+  box-shadow:inset 0 2px 0 var(--accent);
+}
+nav a.tab.quit{margin-left:auto;border:none;background:none;font-size:12px;
+  align-self:center;padding:9px 4px}
 
 .eyebrow{color:var(--muted);font-size:12px;letter-spacing:.14em}
 h1{font-size:23px;font-weight:600;margin:4px 0 4px;letter-spacing:.06em}
@@ -242,10 +257,26 @@ table.ladder td.ly{color:var(--muted)}
 table.ladder td.note{color:var(--muted);font-size:11.5px}
 table.ladder tr.adj td.name{padding-left:22px;color:var(--muted)}
 table.ladder tr.adj td{font-size:12.5px}
-table.ladder tr.sub td{font-weight:600;border-top:1px solid var(--line-2)}
-table.ladder tr.sub td.v{color:var(--ink);text-shadow:0 0 14px rgba(94,224,240,.16)}
-table.ladder tr.last td{border-top:1px solid var(--accent-dim)}
-table.ladder tr.last td.v{color:var(--accent);font-size:17px;
+/* **利益の段に帯を敷く。** 加減項目と同じ見た目だと、営業利益も経常利益も
+   数字の列に埋もれて、どこが「段」なのか目で追えない。 */
+table.ladder tr.sub td{font-weight:600;font-size:14px;
+  border-top:1px solid var(--line-2);
+  background:linear-gradient(90deg,rgba(94,224,240,.11),rgba(94,224,240,.02))}
+table.ladder tr.sub td.name{color:var(--ink);letter-spacing:.03em}
+table.ladder tr.sub td.v{color:var(--ink);font-size:15px;
+  text-shadow:0 0 14px rgba(94,224,240,.20)}
+table.ladder tr.sub td.name::before{content:"";display:inline-block;
+  width:3px;height:14px;margin-right:9px;vertical-align:-2px;border-radius:2px;
+  background:var(--accent-dim)}
+/* 起点（売上高）は加減項目ではない。ここから削られていく、という始まりを示す */
+table.ladder tr.head td{background:linear-gradient(90deg,rgba(255,255,255,.07),transparent);
+  border-top:none}
+table.ladder tr.head td.name::before{background:var(--muted)}
+/* 最後に残るもの。いちばん強く */
+table.ladder tr.last td{border-top:1px solid var(--accent);
+  background:linear-gradient(90deg,rgba(94,224,240,.24),rgba(94,224,240,.05))}
+table.ladder tr.last td.name::before{background:var(--accent);height:17px}
+table.ladder tr.last td.v{color:var(--accent);font-size:18px;
                           text-shadow:0 0 18px rgba(94,224,240,.45)}
 table.ladder.small td{padding:7px 10px}
 
@@ -308,6 +339,7 @@ table.ladder.small td{padding:7px 10px}
   background:linear-gradient(160deg,rgba(94,224,240,.30),rgba(48,124,196,.16));
   border:1px solid var(--line-2);color:var(--accent);font-size:13px;
   font-weight:700;vertical-align:middle;font-variant-numeric:tabular-nums}
+.asof{color:var(--muted);font-size:11px;margin-left:6px}
 .panel{display:none}
 #ch-total:checked~#p-total,#ch-amount:checked~#p-amount,
 #ch-rate:checked~#p-rate,#ch-year:checked~#p-year{display:block}
@@ -373,13 +405,13 @@ section.notes .note{padding:13px 17px;margin-bottom:8px}
 <body>
 <div class="wrap">
 
-<nav><b>経営ステータス</b><a href="note.html">申し送りを書く</a><a href="knowledge.html">知識の泉</a><a href="guide.html">使い方</a></nav>
+<nav><a class="tab here" href="index.html" aria-current="page">経営ステータス</a><a class="tab" href="note.html">申し送り</a><a class="tab" href="knowledge.html">知識の泉</a><a class="tab" href="guide.html">使い方</a></nav>
 
 <header>
   <div class="eyebrow">架空食品商事株式会社</div>
   <h1>経営ステータス</h1>
-  <div class="sub">2026-09-04 23:48 時点 ／ データは 2026-08-12 まで届いています
-    <span class="stamp" title="この画面の版。URLの ?v= と一致していれば最新です">版 20260904-2348</span></div>
+  <div class="sub">2026-09-05 00:11 時点 ／ データは 2026-08-12 まで届いています
+    <span class="stamp" title="この画面の版。URLの ?v= と一致していれば最新です">版 20260905-0011</span></div>
 </header>
 
 <div class="notice"><b>当月の原価率と人時単価は、直近の確定月のものです。</b>会計が当月を締めるのは翌月10日ごろ。売上と労働時間は実績です。<b>その締めを待たずに着地を出すのが、この画面の役目です。</b></div>
@@ -454,7 +486,7 @@ section.notes .note{padding:13px 17px;margin-bottom:8px}
     会計ではこれを <b>段階利益</b> と呼びます ── 利益は一段ずつ削られて、最後に残る。
     前年同月を横に並べてあるので、「売上は伸びたのに利益は落ちた」がどこで起きたかが読めます。</p>
   </details>
-<table class="ladder"><thead><tr><th class="name">段</th><th class="v">当月の着地見込み</th><th class="v">前年同月（2025-08）</th><th class="c">前年比</th><th class="note">出どころ</th></tr></thead><tbody><tr class="adj"><td class="name">売上高</td><td class="v">36.39億円</td><td class="v ly">35.80億円</td><td class="c"><span class="up soft">+1.7%</span></td><td class="note"></td></tr><tr class="adj"><td class="name">売上原価</td><td class="v">−32.13億円</td><td class="v ly">−31.49億円</td><td class="c"><span class="down soft">+2.0%</span></td><td class="note">週次の棚卸から出した原価率 × 日次売上</td></tr><tr class="sub"><td class="name">売上総利益</td><td class="v">4.26億円</td><td class="v ly">4.30億円</td><td class="c"><span class="down soft">-1.1%</span></td><td class="note"></td></tr><tr class="adj"><td class="name">人件費</td><td class="v">−2.53億円</td><td class="v ly">−2.52億円</td><td class="c"><span class="down soft">+0.7%</span></td><td class="note">勤怠の人時 × 会計の人時単価</td></tr><tr class="adj"><td class="name">その他販管費</td><td class="v">−1.58億円</td><td class="v ly">−1.50億円</td><td class="c"><span class="down soft">+5.7%</span></td><td class="note">月額を営業日数で割ったもの</td></tr><tr class="sub"><td class="name">営業利益</td><td class="v">1,425万円</td><td class="v ly">2,930万円</td><td class="c"><span class="down">-51.4%</span></td><td class="note"></td></tr><tr class="adj"><td class="name">営業外収益</td><td class="v">＋1,506万円</td><td class="v ly">＋1,482万円</td><td class="c"><span class="up soft">+1.6%</span></td><td class="note">受取利息・仕入割引など</td></tr><tr class="adj"><td class="name">営業外費用</td><td class="v">−340万円</td><td class="v ly">−305万円</td><td class="c"><span class="down">+11.5%</span></td><td class="note">支払利息など</td></tr><tr class="sub"><td class="name">経常利益</td><td class="v">2,591万円</td><td class="v ly">4,107万円</td><td class="c"><span class="down">-36.9%</span></td><td class="note"></td></tr><tr class="adj"><td class="name">特別利益</td><td class="v">—</td><td class="v ly">—</td><td class="c"><span class="flat">—</span></td><td class="note"></td></tr><tr class="adj"><td class="name">特別損失</td><td class="v">—</td><td class="v ly">—</td><td class="c"><span class="flat">—</span></td><td class="note"></td></tr><tr class="sub"><td class="name">税引前当期純利益</td><td class="v">2,591万円</td><td class="v ly">4,107万円</td><td class="c"><span class="down">-36.9%</span></td><td class="note"></td></tr><tr class="adj"><td class="name">法人税等</td><td class="v">−777万円</td><td class="v ly">−1,232万円</td><td class="c"><span class="flat">-36.9%</span></td><td class="note">実効税率 30% での概算</td></tr><tr class="sub last"><td class="name">当期純利益</td><td class="v">1,814万円</td><td class="v ly">2,875万円</td><td class="c"><span class="down">-36.9%</span></td><td class="note"></td></tr></tbody></table><div class="legend">営業外（利息・仕入割引など）は毎月出るものなので、2026-07 の額を当てています。<b>特別損益は推定していません</b> ── 前月に減損があったからといって今月も出るわけがないからです。当月の確定分だけを載せ、無ければゼロのまま置きます。</div>
+<table class="ladder"><thead><tr><th class="name">段</th><th class="v">当月の着地見込み</th><th class="v">前年同月（2025-08）</th><th class="c">前年比</th><th class="note">出どころ</th></tr></thead><tbody><tr class="sub head"><td class="name">売上高</td><td class="v">36.39億円</td><td class="v ly">35.80億円</td><td class="c"><span class="up soft">+1.7%</span></td><td class="note"></td></tr><tr class="adj"><td class="name">売上原価</td><td class="v">−32.13億円</td><td class="v ly">−31.49億円</td><td class="c"><span class="down soft">+2.0%</span></td><td class="note">週次の棚卸から出した原価率 × 日次売上</td></tr><tr class="sub"><td class="name">売上総利益</td><td class="v">4.26億円</td><td class="v ly">4.30億円</td><td class="c"><span class="down soft">-1.1%</span></td><td class="note"></td></tr><tr class="adj"><td class="name">人件費</td><td class="v">−2.53億円</td><td class="v ly">−2.52億円</td><td class="c"><span class="down soft">+0.7%</span></td><td class="note">勤怠の人時 × 会計の人時単価</td></tr><tr class="adj"><td class="name">その他販管費</td><td class="v">−1.58億円</td><td class="v ly">−1.50億円</td><td class="c"><span class="down soft">+5.7%</span></td><td class="note">月額を営業日数で割ったもの</td></tr><tr class="sub"><td class="name">営業利益</td><td class="v">1,425万円</td><td class="v ly">2,930万円</td><td class="c"><span class="down">-51.4%</span></td><td class="note"></td></tr><tr class="adj"><td class="name">営業外収益</td><td class="v">＋1,506万円</td><td class="v ly">＋1,482万円</td><td class="c"><span class="up soft">+1.6%</span></td><td class="note">受取利息・仕入割引など</td></tr><tr class="adj"><td class="name">営業外費用</td><td class="v">−340万円</td><td class="v ly">−305万円</td><td class="c"><span class="down">+11.5%</span></td><td class="note">支払利息など</td></tr><tr class="sub"><td class="name">経常利益</td><td class="v">2,591万円</td><td class="v ly">4,107万円</td><td class="c"><span class="down">-36.9%</span></td><td class="note"></td></tr><tr class="adj"><td class="name">特別利益</td><td class="v">—</td><td class="v ly">—</td><td class="c"><span class="flat">—</span></td><td class="note"></td></tr><tr class="adj"><td class="name">特別損失</td><td class="v">—</td><td class="v ly">—</td><td class="c"><span class="flat">—</span></td><td class="note"></td></tr><tr class="sub"><td class="name">税引前当期純利益</td><td class="v">2,591万円</td><td class="v ly">4,107万円</td><td class="c"><span class="down">-36.9%</span></td><td class="note"></td></tr><tr class="adj"><td class="name">法人税等</td><td class="v">−777万円</td><td class="v ly">−1,232万円</td><td class="c"><span class="flat">-36.9%</span></td><td class="note">実効税率 30% での概算</td></tr><tr class="sub last"><td class="name">当期純利益</td><td class="v">1,814万円</td><td class="v ly">2,875万円</td><td class="c"><span class="down">-36.9%</span></td><td class="note"></td></tr></tbody></table><div class="legend">営業外（利息・仕入割引など）は毎月出るものなので、2026-07 の額を当てています。<b>特別損益は推定していません</b> ── 前月に減損があったからといって今月も出るわけがないからです。当月の確定分だけを載せ、無ければゼロのまま置きます。</div>
 </section>
 
 <section>
@@ -463,7 +495,7 @@ section.notes .note{padding:13px 17px;margin-bottom:8px}
   <p class="lead"><b>利益と現金は別物です。</b>売った時点で利益は立ちますが、回収するまで現金は増えません。
     残高は<b>締まった月末時点</b>のもの（当月はまだ締まっていないため）。</p>
   </details>
-<div class="breakdown"><div><div class="k">現預金</div><div class="v">14.14億円</div><div class="n">手元の現金 ／ 前月比 <span class="down soft">-9.9%</span></div></div><div><div class="k">売掛金</div><div class="v">48.32億円</div><div class="n">まだ回収していない売上 ／ 前月比 <span class="down">+13.4%</span></div></div><div><div class="k">棚卸資産</div><div class="v">11.74億円</div><div class="n">在庫として寝ている金 ／ 前月比 <span class="up soft">-2.4%</span></div></div><div><div class="k">買掛金</div><div class="v">35.31億円</div><div class="n">まだ払っていない仕入 ／ 前月比 <span class="up">+10.1%</span></div></div><div><div class="k">未払金</div><div class="v">4.74億円</div><div class="n">まだ払っていない経費 ／ 前月比 <span class="up soft">+6.0%</span></div></div><div><div class="k">借入金</div><div class="v">19.40億円</div><div class="n">返す約束のある金 ／ 前月比 <span class="up soft">-1.0%</span></div></div></div><div class="cashgrid"><div class="panel-box"><h3>現金が戻ってくるまで 17日<span class="hint" tabindex="0" role="note" aria-label="現金が戻ってくるまでとは">ⓘ<span class="tip"><b>現金が戻ってくるまで</b><br>仕入れた物が現金になって戻るまでの日数（CCC）。売掛の回収 ＋ 在庫の滞留 − 仕入の支払猶予 で出します。</span></span></h3><div class="legend">売掛の回収 37.8日 ＋ 在庫の滞留 10.4日 − 仕入の支払猶予 31.5日。<b>短いほど、同じ商売でも手元に金が残ります。</b>（2026-07 月末の残高で計算）</div></div><div class="panel-box"><h3>月末の現預金は 12.38億円 の見込み</h3><table class="ladder small"><tbody><tr class="sub"><td class="name">2026-07 月末の現預金</td><td class="v">14.14億円</td></tr><tr class="adj"><td class="name">当期純利益の見込み</td><td class="v">＋1,814万円</td></tr><tr class="adj"><td class="name">減価償却費（現金は出ていかない）</td><td class="v">＋2,200万円</td></tr><tr class="adj"><td class="name">運転資本の増加（売掛と在庫に化けた分）<span class="hint" tabindex="0" role="note" aria-label="運転資本とは">ⓘ<span class="tip"><b>運転資本</b><br>売掛金 ＋ 棚卸資産 − 買掛金。商売を回すために立て替えている金です。増えるとその分だけ現金が減ります。</span></span></td><td class="v">−2.17億円</td></tr><tr class="adj sub2"><td class="name">うち 売掛金（回収が遅れた分）</td><td class="v">＋5.70億円</td></tr><tr class="adj sub2"><td class="name">うち 棚卸資産（在庫に積んだ分）</td><td class="v">−2,874万円</td></tr><tr class="adj sub2"><td class="name">うち 買掛金（支払を待ってもらった分）</td><td class="v">−3.25億円</td></tr><tr class="sub last"><td class="name">当月末の現預金（見込み）</td><td class="v">12.38億円</td></tr></tbody></table><div class="legend"><b>利益が出ていても現金は増えません。</b>売掛金と在庫が膨らめば、その分だけ金は寝たままです。</div></div></div>
+<div class="breakdown"><div><div class="k">現預金</div><div class="v">14.14億円</div><div class="n">手元の現金 ／ 前月比 <span class="down soft">-9.9%</span></div></div><div><div class="k">売掛金</div><div class="v">48.32億円</div><div class="n">まだ回収していない売上 ／ 前月比 <span class="down">+13.4%</span></div></div><div><div class="k">棚卸資産</div><div class="v">11.74億円</div><div class="n">在庫として寝ている金 ／ 前月比 <span class="up soft">-2.4%</span></div></div><div><div class="k">買掛金</div><div class="v">35.31億円</div><div class="n">まだ払っていない仕入 ／ 前月比 <span class="up">+10.1%</span></div></div><div><div class="k">未払金</div><div class="v">4.74億円</div><div class="n">まだ払っていない経費 ／ 前月比 <span class="up soft">+6.0%</span></div></div><div><div class="k">借入金</div><div class="v">19.40億円</div><div class="n">返す約束のある金 ／ 前月比 <span class="up soft">-1.0%</span></div></div></div><div class="cashgrid"><div class="panel-box"><h3>現金が戻ってくるまで 17日<span class="hint" tabindex="0" role="note" aria-label="現金が戻ってくるまでとは">ⓘ<span class="tip"><b>現金が戻ってくるまで</b><br>仕入れた物が現金になって戻るまでの日数（CCC）。売掛の回収 ＋ 在庫の滞留 − 仕入の支払猶予 で出します。</span></span></h3><div class="legend">売掛の回収 37.8日 ＋ 在庫の滞留 10.4日 − 仕入の支払猶予 31.5日<span class="asof">（2026-07 月末の残高）</span></div></div><div class="panel-box"><h3>月末の現預金は 12.38億円 の見込み</h3><table class="ladder small"><tbody><tr class="sub"><td class="name">2026-07 月末の現預金</td><td class="v">14.14億円</td></tr><tr class="adj"><td class="name">当期純利益の見込み</td><td class="v">＋1,814万円</td></tr><tr class="adj"><td class="name">減価償却費（現金は出ていかない）</td><td class="v">＋2,200万円</td></tr><tr class="adj"><td class="name">運転資本の増加（売掛と在庫に化けた分）<span class="hint" tabindex="0" role="note" aria-label="運転資本とは">ⓘ<span class="tip"><b>運転資本</b><br>売掛金 ＋ 棚卸資産 − 買掛金。商売を回すために立て替えている金です。増えるとその分だけ現金が減ります。</span></span></td><td class="v">−2.17億円</td></tr><tr class="adj sub2"><td class="name">うち 売掛金（回収が遅れた分）</td><td class="v">＋5.70億円</td></tr><tr class="adj sub2"><td class="name">うち 棚卸資産（在庫に積んだ分）</td><td class="v">−2,874万円</td></tr><tr class="adj sub2"><td class="name">うち 買掛金（支払を待ってもらった分）</td><td class="v">−3.25億円</td></tr><tr class="sub last"><td class="name">当月末の現預金（見込み）</td><td class="v">12.38億円</td></tr></tbody></table><div class="legend"><b>利益が出ていても現金は増えません。</b>売掛金と在庫が膨らめば、その分だけ金は寝たままです。</div></div></div>
 </section>
 
 <section>
@@ -480,7 +512,7 @@ section.notes .note{padding:13px 17px;margin-bottom:8px}
 
 <section>
   <h2>仕入と在庫 ── 売上の裏側で先に動く数字<span class="hint" tabindex="0" role="note" aria-label="期首とは">ⓘ<span class="tip"><b>期首</b><br>その月の始まりの在庫。前月末に締めた在庫がそのまま繰り越されます。</span></span></h2>
-  <div class="breakdown"><div><div class="k">今月ここまでの仕入</div><div class="v">12.38億円</div><div class="n">確定した営業日ぶん</div></div><div><div class="k">当月の着地見込み</div><div class="v">31.99億円</div><div class="n">売上と同じ「前年と同じペースなら」で伸ばしたもの</div></div><div><div class="k">前年同月</div><div class="v">31.50億円</div><div class="n">前年比 <span class="down soft">+1.5%</span></div></div></div><div class="breakdown"><div><div class="k">最後に数えた在庫</div><div class="v">11.66億円</div><div class="n">2026-08-08 時点（週次）／ 在庫日数 9.3日<span class="hint" tabindex="0" role="note" aria-label="在庫日数とは">ⓘ<span class="tip"><b>在庫日数</b><br>在庫 ÷ 1日あたりの売上原価。いまの在庫が何日分かを表します。短いほど、同じ商売でも寝ている金が少なくて済みます。</span></span></div></div><div><div class="k">いまの在庫（想定）</div><div class="v">11.74億円</div><div class="n">2026-08-12 ／ 数えた日から 3営業日ぶん、在庫日数を当てたもの</div></div><div><div class="k">在庫日数</div><div class="v">9.5日</div><div class="n">在庫 ÷ 日商原価。短いほど、同じ商売でも金が寝ません</div></div></div>
+  <div class="breakdown"><div><div class="k">今月ここまでの仕入</div><div class="v">12.38億円</div><div class="n">確定した営業日ぶん</div></div><div><div class="k">当月の着地見込み</div><div class="v">31.99億円</div><div class="n">売上と同じ「前年と同じペースなら」で伸ばしたもの</div></div><div><div class="k">前年同月</div><div class="v">31.50億円</div><div class="n">前年比 <span class="down soft">+1.5%</span></div></div></div><div class="breakdown"><div><div class="k">最後に数えた在庫</div><div class="v">11.66億円</div><div class="n">2026-08-08 時点（週次）／ 在庫日数 9.3日<span class="hint" tabindex="0" role="note" aria-label="在庫日数とは">ⓘ<span class="tip"><b>在庫日数</b><br>在庫 ÷ 1日あたりの売上原価。いまの在庫が何日分かを表します。短いほど、同じ商売でも寝ている金が少なくて済みます。</span></span></div></div><div><div class="k">いまの在庫（想定）</div><div class="v">11.74億円</div><div class="n">2026-08-12 ／ 数えた日から 3営業日ぶん、在庫日数を当てたもの</div></div><div><div class="k">在庫日数</div><div class="v">9.5日</div><div class="n">在庫 ÷ 日商原価</div></div></div>
   <details class="why"><summary>この節の読み方</summary>
   <p class="lead"><b>在庫は月ごとに締まります。</b>だから<b>当月の在庫</b>だけを描いています
     ── 2026-08 の期首（前月末の在庫）から始まり、日々こう動きます。</p>
@@ -515,12 +547,13 @@ section.notes .note{padding:13px 17px;margin-bottom:8px}
   <li><b>固定費</b>　月額を営業日数で割ったもの × 残り営業日</li>
 </ul>
 
-<h3>3. 航海図の見方</h3>
-<p>今月の1日目から積み上がる累計利益です。<b>線が予算の水平線より上にいれば順調</b>。
-前年の薄い線と比べれば、去年より速いか遅いかが分かります。</p>
+<h3>3. データの届き具合</h3>
+<p>いちばん上に、サイロごとの<b>最終データ日</b>を置いています。
+自動で取り込むようにするほど「今日も動いたはず」と思い込むので、
+<b>届いていなければ画面のほうから言います</b>。遅れているものは赤で名指しします。</p>
 
-<h3>4. 年間の着地 ── 月を見る目と、年を見る目</h3>
-<p>会社の損益は<b>月ごとに確定して、年間へ積み上がります</b>。だから経営に要る目は2つ。
+<h3>4. 着地の見通し ── 今月と、年間</h3>
+<p>会社の損益は<b>月ごとに確定して、年間へ積み上がります</b>。だから見る目は2つ。
 <b>今月をどう着地させるか</b>と、<b>その積み上げが年間でどこへ行くか</b>です。</p>
 <p>年間の画面では、12ヶ月を3つに塗り分けています。</p>
 <ul>
@@ -529,26 +562,56 @@ section.notes .note{padding:13px 17px;margin-bottom:8px}
   <li><b>予測</b>　まだ来ていない月。前年の同じ月に、当期のここまでの伸びを当てたもの</li>
 </ul>
 <p>先の月は予測なので、<b>言い切れる強さも予測ぶんだけ弱くなります</b>。
-だから「達成できます」ではなく<b>「残り何ヶ月が何%下ぶれたら届かないか」</b>を出しています。
-これなら外れても嘘になりません。</p>
+だから「達成できます」ではなく<b>「残り何ヶ月が何%下ぶれたら届かないか」</b>を出しています。</p>
 <p>予算は年間を12等分していません。<b>12月は伸び、2月は沈む</b> ── 一律で置くと閑散月が毎年必ず未達になり、
 予算比の欄が読まれなくなるためです。月ごとの配分は設定ファイルに置いてあります。</p>
 
-<h3>5. 売上が伸びていても、利益は落ちます</h3>
+<h3>5. 画面が答えるのは、3つ</h3>
+<p>節の見出しに番号を振ってあります。</p>
+<ul>
+  <li><b>1 順調に儲かっているか</b>　<b>利益の階段</b>（段階利益）で、売上から当期純利益まで一段ずつ。
+      利益の段には帯を敷いてあるので、<b>どこで削られたか</b>が目で追えます</li>
+  <li><b>2 金は回るか</b>　<b>現金</b>の橋と残高。利益が出ていても<b>運転資本</b>が膨らめば現金は減ります。
+      仕入れた物が現金になって戻るまでの日数（CCC）も出します</li>
+  <li><b>3 足りない分を、どう埋めるか</b>　次の項目</li>
+</ul>
+
+<h3>6. 足りない分と、打ち手</h3>
+<p>不足額を出すだけでは、読んだあとに何も起きません。だから<b>埋め方</b>まで置きます。</p>
+<ul>
+  <li><b>レバー</b>　売上・粗利率・人件費・その他販管費を1目盛り動かすと、営業利益がいくら動くか。
+      <b>判断の材料は機械、判断は人</b>です</li>
+  <li><b>打ち手の台帳</b>　部門・何を動かすか・いくら見込むか・誰が・いつまでに・いまどうなっているか</li>
+</ul>
+<p><b>見込み額は人が入れます。</b>「これをやれば1,200万円」は、現場と部門長にしか言えません。</p>
+<p>見込みに<b>数えない</b>ものが3つあります ──
+<b>期限が過ぎて動いていないもの</b>（赤で名指しします）、<b>効かなかったもの</b>、
+そして<b>効いたもの</b>（効果はもう実績に出ているので、足すと二重になります）。</p>
+
+<h3>7. 仕入と在庫</h3>
+<p>在庫は<b>利益計算の入力</b>です。<b>期首在庫 ＋ 仕入 − 売上原価</b>で売上原価が決まり、粗利が決まります。</p>
+<p>在庫は月ごとに締まるので、画面も<b>当月だけ</b>を描きます。
+<b>期首</b>（前月末の在庫）から始まり、棚卸の日に実測へ戻し、そのあいだを積み上げる。
+最後の棚卸までが実線、その先が破線です。</p>
+<p>線の下の棒は、その日の<b>仕入 − 売上原価</b>。
+<b>線が上がった理由が、線の真下にあります</b>。</p>
+
+<h3>8. 売上が伸びていても、利益は落ちます</h3>
 <p>だから内訳を並べています。<b>売上・粗利率・人件費</b>のどれが動いたのか。
 打つ手はそれぞれ違います ── 営業の話か、仕入と売価の話か、シフトの話か。</p>
 
-<h3>6. 「いま手を打つこと」には、2種類あります</h3>
+<h3>9. 「いま手を打つこと」には、2種類あります</h3>
 <p><b>傾向</b>＝3週以上続けて下がっているもの。数量が戻る見込みか、売価と人時の張り方を変えるかを、部門長と決める話です。<br>
 <b>単発</b>＝続けての低下ではないもの。特売・出荷ずれ・得意先の休業など、その週だけの要因かを日次で確認します。</p>
+<p>判定語は<b>要対処</b>（目標に届かず、さらに落ちている）／<b>失速</b>／<b>順調</b>の3つです。</p>
 
-<h3>7. 警告は、説明が付いても消えません</h3>
+<h3>10. 警告は、説明が付いても消えません</h3>
 <p>現場から説明が付いても、警告は残ります。<b>説明が付いたかどうかを決めるのは人です。</b>
 その下に、その部門の過去の知恵（知識の泉）も並びます。</p>
 
-<h3>8. この画面が言えないのは「なぜ」</h3>
+<h3>11. この画面が言えないのは「なぜ」</h3>
 <p>どこが、どれだけ、どちら側の要因で落ちたか ── ここまでが数字で言えることです。
-<b>一番下の「この画面が答えないこと」を必ず読んでください。</b></p>
+<b>なぜ落ちたかは、現場の一行にしかありません。</b>だから申し送りを同じ画面に並べています。</p>
 
 </details>
 

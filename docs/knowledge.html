@@ -59,14 +59,29 @@ body{
 
 .wrap{max-width:1040px;margin:0 auto;padding:26px 22px 72px}
 
+/* 画面の行き来。**押せる物に見えなければ、そこにあることに気づけない。**
+   飾り文字のままだと、タブがあると分からず戻れなくなる。 */
 nav{
-  display:flex;gap:18px;font-size:12.5px;letter-spacing:.03em;
-  padding-bottom:13px;margin-bottom:20px;
-  border-bottom:1px solid var(--line);
+  display:flex;gap:8px;flex-wrap:wrap;font-size:13.5px;letter-spacing:.02em;
+  padding-bottom:0;margin-bottom:24px;
+  border-bottom:1px solid var(--line-2);
 }
-nav a{color:var(--muted);text-decoration:none;transition:color .18s,text-shadow .18s}
-nav a:hover{color:var(--accent);text-shadow:var(--glow)}
-nav b{color:var(--accent);font-weight:600;text-shadow:var(--glow)}
+nav a.tab{
+  color:var(--muted);text-decoration:none;padding:9px 18px;
+  border:1px solid var(--line);border-bottom:none;
+  border-radius:10px 10px 0 0;margin-bottom:-1px;
+  background:rgba(10,20,30,.45);transition:color .18s,background .18s,border-color .18s;
+}
+nav a.tab:hover{color:var(--accent);border-color:var(--line-2);
+  background:rgba(20,40,56,.7)}
+/* いまどこにいるか。**色だけでなく塗りと縁で示す。** */
+nav a.tab.here{
+  color:var(--ink);font-weight:600;cursor:default;
+  background:var(--card-2);border-color:var(--line-2);
+  box-shadow:inset 0 2px 0 var(--accent);
+}
+nav a.tab.quit{margin-left:auto;border:none;background:none;font-size:12px;
+  align-self:center;padding:9px 4px}
 
 .eyebrow{color:var(--muted);font-size:12px;letter-spacing:.14em}
 h1{font-size:23px;font-weight:600;margin:4px 0 4px;letter-spacing:.06em}
@@ -233,7 +248,7 @@ a{color:var(--bar)}
 <body>
 <div class="wrap">
 
-<nav><a href="index.html">ダッシュボード</a><a href="note.html">申し送りを書く</a><b>知識の泉</b><a href="guide.html">使い方</a></nav>
+<nav><a class="tab" href="index.html">経営ステータス</a><a class="tab" href="note.html">申し送り</a><a class="tab here" href="knowledge.html" aria-current="page">知識の泉</a><a class="tab" href="guide.html">使い方</a></nav>
 
 <div class="eyebrow">架空食品商事株式会社</div>
 <h1>知識の泉</h1><div class="notice"><b>これは読むだけの見本です。</b>サーバが動いていないので、書き込みはできません（入力欄は押せなくしてあります）。実際に動かすと、ここから申し送りと知識が書けます ── <a href="https://github.com/tatatasan323-cell/castle">リポジトリ</a>を取得して <code>python castle/app/serve.py</code> で開きます。</div>
@@ -270,7 +285,7 @@ a{color:var(--bar)}
 
 
 <h2>現役の知識 3件</h2>
-<div class="entry"><div class="ess">会計の締めは翌月10日ごろ。当月の原価率と人時単価は直近確定月のものを当てている</div><div class="sub">なぜ：<b>日ごとの原価を持っているシステムが無い。持っていない数字は作らない方針のため。</b></div><div class="sub">使い方：<b>当月の粗利まわりの数字を外部に出すときは、推定であることを必ず添える。</b></div><div class="meta"><span class="tag 前提">前提</span><span class="tag">全社</span><span>記録 経理課 井上 ／ 見直し <span class="">2026-09-04</span></span><form class="inline" method="post"><input disabled type="hidden" name="action" value="review"><input disabled type="hidden" name="id" value="11568"><button disabled class="quiet" type="submit">まだ有効</button></form></div></div><div class="entry"><div class="ess">相場高のときは数量を追わない。赤字取引を止めて粗利率を守るほうが着地は良い</div><div class="sub">なぜ：<b>数量を維持しようとすると売価転嫁が遅れ、粗利率が先に落ちる。戻ったときに元の率へ戻すほうが難しい。</b></div><div class="sub">使い方：<b>相場が前年比+15%を超えたら、赤字取引の一覧を出して部門長と切る順番を決める。</b></div><div class="meta"><span class="tag 判断">判断</span><span class="tag">農産部</span><span>記録 農産課 佐藤 ／ 見直し <span class="">2026-09-04</span></span><form class="inline" method="post"><input disabled type="hidden" name="action" value="review"><input disabled type="hidden" name="id" value="11567"><button disabled class="quiet" type="submit">まだ有効</button></form></div></div><div class="entry"><div class="ess">盆前の欠品対策で在庫を積んだ年は、明けに廃棄が出て粗利がかえって沈んだ</div><div class="sub">なぜ：<b>盆明けの立ち上がりは需要が読みにくく、積んだ分がそのまま残る。欠品を恐れる気持ちのほうが、廃棄の記憶より強く働く。</b></div><div class="sub">使い方：<b>盆前の発注は前年実績の1.0倍を上限にする。欠品は許容し、廃棄を避ける側に倒す。</b></div><div class="meta"><span class="tag 失敗">失敗</span><span class="tag">業務用食材部</span><span>記録 業務用課 鈴木 ／ 見直し <span class="">2026-09-04</span></span><form class="inline" method="post"><input disabled type="hidden" name="action" value="review"><input disabled type="hidden" name="id" value="11566"><button disabled class="quiet" type="submit">まだ有効</button></form></div></div>
+<div class="entry"><div class="ess">会計の締めは翌月10日ごろ。当月の原価率と人時単価は直近確定月のものを当てている</div><div class="sub">なぜ：<b>日ごとの原価を持っているシステムが無い。持っていない数字は作らない方針のため。</b></div><div class="sub">使い方：<b>当月の粗利まわりの数字を外部に出すときは、推定であることを必ず添える。</b></div><div class="meta"><span class="tag 前提">前提</span><span class="tag">全社</span><span>記録 経理課 井上 ／ 見直し <span class="">2026-09-05</span></span><form class="inline" method="post"><input disabled type="hidden" name="action" value="review"><input disabled type="hidden" name="id" value="11568"><button disabled class="quiet" type="submit">まだ有効</button></form></div></div><div class="entry"><div class="ess">相場高のときは数量を追わない。赤字取引を止めて粗利率を守るほうが着地は良い</div><div class="sub">なぜ：<b>数量を維持しようとすると売価転嫁が遅れ、粗利率が先に落ちる。戻ったときに元の率へ戻すほうが難しい。</b></div><div class="sub">使い方：<b>相場が前年比+15%を超えたら、赤字取引の一覧を出して部門長と切る順番を決める。</b></div><div class="meta"><span class="tag 判断">判断</span><span class="tag">農産部</span><span>記録 農産課 佐藤 ／ 見直し <span class="">2026-09-05</span></span><form class="inline" method="post"><input disabled type="hidden" name="action" value="review"><input disabled type="hidden" name="id" value="11567"><button disabled class="quiet" type="submit">まだ有効</button></form></div></div><div class="entry"><div class="ess">盆前の欠品対策で在庫を積んだ年は、明けに廃棄が出て粗利がかえって沈んだ</div><div class="sub">なぜ：<b>盆明けの立ち上がりは需要が読みにくく、積んだ分がそのまま残る。欠品を恐れる気持ちのほうが、廃棄の記憶より強く働く。</b></div><div class="sub">使い方：<b>盆前の発注は前年実績の1.0倍を上限にする。欠品は許容し、廃棄を避ける側に倒す。</b></div><div class="meta"><span class="tag 失敗">失敗</span><span class="tag">業務用食材部</span><span>記録 業務用課 鈴木 ／ 見直し <span class="">2026-09-05</span></span><form class="inline" method="post"><input disabled type="hidden" name="action" value="review"><input disabled type="hidden" name="id" value="11566"><button disabled class="quiet" type="submit">まだ有効</button></form></div></div>
 
 <details class="write" >
 <summary>知識を書く</summary>

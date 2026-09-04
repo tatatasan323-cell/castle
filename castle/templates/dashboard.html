@@ -63,10 +63,26 @@ table.ladder td.ly{color:var(--muted)}
 table.ladder td.note{color:var(--muted);font-size:11.5px}
 table.ladder tr.adj td.name{padding-left:22px;color:var(--muted)}
 table.ladder tr.adj td{font-size:12.5px}
-table.ladder tr.sub td{font-weight:600;border-top:1px solid var(--line-2)}
-table.ladder tr.sub td.v{color:var(--ink);text-shadow:0 0 14px rgba(94,224,240,.16)}
-table.ladder tr.last td{border-top:1px solid var(--accent-dim)}
-table.ladder tr.last td.v{color:var(--accent);font-size:17px;
+/* **利益の段に帯を敷く。** 加減項目と同じ見た目だと、営業利益も経常利益も
+   数字の列に埋もれて、どこが「段」なのか目で追えない。 */
+table.ladder tr.sub td{font-weight:600;font-size:14px;
+  border-top:1px solid var(--line-2);
+  background:linear-gradient(90deg,rgba(94,224,240,.11),rgba(94,224,240,.02))}
+table.ladder tr.sub td.name{color:var(--ink);letter-spacing:.03em}
+table.ladder tr.sub td.v{color:var(--ink);font-size:15px;
+  text-shadow:0 0 14px rgba(94,224,240,.20)}
+table.ladder tr.sub td.name::before{content:"";display:inline-block;
+  width:3px;height:14px;margin-right:9px;vertical-align:-2px;border-radius:2px;
+  background:var(--accent-dim)}
+/* 起点（売上高）は加減項目ではない。ここから削られていく、という始まりを示す */
+table.ladder tr.head td{background:linear-gradient(90deg,rgba(255,255,255,.07),transparent);
+  border-top:none}
+table.ladder tr.head td.name::before{background:var(--muted)}
+/* 最後に残るもの。いちばん強く */
+table.ladder tr.last td{border-top:1px solid var(--accent);
+  background:linear-gradient(90deg,rgba(94,224,240,.24),rgba(94,224,240,.05))}
+table.ladder tr.last td.name::before{background:var(--accent);height:17px}
+table.ladder tr.last td.v{color:var(--accent);font-size:18px;
                           text-shadow:0 0 18px rgba(94,224,240,.45)}
 table.ladder.small td{padding:7px 10px}
 
@@ -129,6 +145,7 @@ table.ladder.small td{padding:7px 10px}
   background:linear-gradient(160deg,rgba(94,224,240,.30),rgba(48,124,196,.16));
   border:1px solid var(--line-2);color:var(--accent);font-size:13px;
   font-weight:700;vertical-align:middle;font-variant-numeric:tabular-nums}
+.asof{color:var(--muted);font-size:11px;margin-left:6px}
 .panel{display:none}
 #ch-total:checked~#p-total,#ch-amount:checked~#p-amount,
 #ch-rate:checked~#p-rate,#ch-year:checked~#p-year{display:block}
