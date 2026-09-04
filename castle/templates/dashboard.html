@@ -73,7 +73,7 @@ table.ladder.small td{padding:7px 10px}
 .cashgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;margin-top:14px}
 .panel-box{background:var(--card);border:1px solid var(--line);border-radius:12px;
            padding:16px 19px;backdrop-filter:blur(7px);-webkit-backdrop-filter:blur(7px)}
-.panel-box h3{font-size:15px;font-weight:600;margin:0 0 6px;color:var(--accent);
+.panel-box h3{font-size:14px;font-weight:600;margin:0 0 6px;color:var(--accent);
               text-shadow:var(--glow)}
 
 .voyage{padding:18px 20px 14px}
@@ -123,6 +123,12 @@ table.ladder.small td{padding:7px 10px}
 .hint:hover .tip,.hint:focus .tip{display:block}
 /* 右端に置く印は左へ開く。中央から開くと画面の外へ出る（実測で確認） */
 .hint.tip-right .tip{left:auto;right:-8px;transform:none}
+/* 3つの問いに番号を振る。**画面が答えるのは3つだと、見ただけで分かる形にする。** */
+.q{display:inline-flex;align-items:center;justify-content:center;
+  width:24px;height:24px;margin-right:10px;border-radius:50%;
+  background:linear-gradient(160deg,rgba(94,224,240,.30),rgba(48,124,196,.16));
+  border:1px solid var(--line-2);color:var(--accent);font-size:13px;
+  font-weight:700;vertical-align:middle;font-variant-numeric:tabular-nums}
 .panel{display:none}
 #ch-total:checked~#p-total,#ch-amount:checked~#p-amount,
 #ch-rate:checked~#p-rate,#ch-year:checked~#p-year{display:block}
@@ -200,8 +206,6 @@ $nav
 $notice
 
 $company_block
-
-$trend_block
 
 $howto_block
 

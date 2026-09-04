@@ -166,11 +166,9 @@ def yen(value):
 
 
 
-def pct(value, good_high=True, unit="%"):
-    if value is None:
-        return '<span class="flat">—</span>'
-    cls = "flat" if abs(value) < 0.5 else ("up" if (value > 0) == good_high else "down")
-    return '<span class="%s">%+.1f%s</span>' % (cls, value, unit)
+# 同じ書き方が2箇所にあると、片方だけ直したときに画面の中で塗り分けが食い違う
+# ── 2026-09-05、赤を2段階にしたのに週次カードだけ濃いままだった。screen に寄せる。
+pct = screen.pct
 
 
 def momentum(weeks, span=3):
@@ -388,6 +386,60 @@ def _stock_view(book):
             "guessed_days": sum(1 for d in days if d > settled)}
 
 
+def scale_of(conn, cfg, book):
+    """記事が引用する「規模」の数字を、成果物の側で持つ。
+
+    **記事に書き写した数字は、書いた瞬間から古くなる。** ファイル数も行数も
+    取り込み件数も、作業のたびに動く。人が覚えて書き直すのは必ず漏れるので、
+    ここで数えて summary.json に載せ、記事の照合（crosscheck_article.py）に使う。
+    """
+    root = db.ROOT
+    skip = {"__pycache__", ".git", "out", "backups", "incoming", "図解"}
+    files = [f for f in root.rglob("*")
+             if f.is_file() and f.suffix in (".py", ".html", ".css", ".json", ".md", ".sql", ".bat")
+             and not (set(f.parts) & skip)]
+    lines = sum(len(f.read_text(encoding="utf-8", errors="replace").splitlines()) for f in files)
+
+    taken = conn.execute(
+        "SELECT COUNT(*) AS n, COALESCE(SUM(rows_ok),0) AS rows FROM import_log"
+        " WHERE undone_at IS NULL").fetchone()
+    records = conn.execute(
+        "SELECT COUNT(*) FROM records WHERE created_by LIKE 'import/%'").fetchone()[0]
+
+    # 間接部門が「その他販管費」に占める割合。売上を持たない部門を外すと消える額。
+    monthly = pnl.load_monthly(conn)
+    direct = {d["name"] for d in cfg.measured()}
+    last = max((m for rows in monthly.values() for m in rows), default=None)
+    total = indirect = 0.0
+    for name, rows in monthly.items():
+        v = rows.get(last)
+        if not v:
+            continue
+        total += v["sga"]
+        if name not in direct:
+            indirect += v["sga"]
+
+    # 積み上げた値が、次の棚卸の実データにどれだけ着地したか（いちばん外した週）。
+    # 判定【21】と同じ測り方 ── 棚卸の前日の推定値を、その棚卸の実数と比べる。
+    daily = pnl.daily_stock(conn, cfg)
+    counted = pnl.load_stock(conn)
+    worst = 0.0
+    stamps = sorted(counted)
+    for before, now in zip(stamps, stamps[1:]):
+        if (datetime.date.fromisoformat(now)
+                - datetime.date.fromisoformat(before)).days > 60:
+            continue
+        prev_day = max((d for d in daily if d < now), default=None)
+        if prev_day is None:
+            continue
+        worst = max(worst, abs(daily[prev_day]["amount"] - counted[now]) / counted[now] * 100)
+
+    return {"files": len(files), "lines": lines,
+            "imports": taken["n"], "imported_rows": records,
+            "indirect_sga_share": (indirect / total * 100) if total else 0.0,
+            "stock_drift": worst}
+
+
 def build(instance, verbose=False, nav=False, scope=None):
     """scope に部門名の一覧を渡すと、その部門ぶんだけを描く。
 
@@ -543,21 +595,28 @@ def build(instance, verbose=False, nav=False, scope=None):
     }
     # 在庫は**当月だけ**を描く（期首＝前月末の1点だけ添える）。
     # 2ヶ月を1枚に並べても、どちらの月の話をしているのか分からなくなる。
+    _board = actions.board(conn, cfg, scope=scope)
     stock_view = pnl.stock_month(conn, cfg)
     stock_days = (stock_view or {}).get("days") or []
 
     if scope is None:
+        trend_block = string.Template(
+            (PART / "_trend.html").read_text(encoding="utf-8")).substitute(
+            voyage=screen.voyage(month),
+            actual_days=month["actual_days"], remaining_days=month["remaining_days"],
+            year_view=screen.year_view(year), year_verdict=screen.year_verdict(year),
+            **dept_charts)
         company_block = string.Template(
             (PART / "_company.html").read_text(encoding="utf-8")).substitute(
             freshness=screen.freshness(
                 intake.freshness(conn, cfg),
                 (cfg.sources or {}).get("基準日")
                 or datetime.date.today().isoformat()),
+            trend_block=trend_block,
             hint_ladder=screen.hint("段階利益"),
             hint_cash=screen.hint("運転資本"),
             hint_stock=screen.hint("期首"),
-            closing=screen.closing(pnl.gap(conn, cfg, metric["yoy_offset_days"]),
-                                   actions.board(conn, cfg, scope=scope)),
+            closing=screen.closing(pnl.gap(conn, cfg, metric["yoy_offset_days"]), _board),
             landing=screen.landing(month),
             breakdown=screen.breakdown(month),
             ladder=screen.ladder(book),
@@ -568,12 +627,6 @@ def build(instance, verbose=False, nav=False, scope=None):
             stockchart=screen.stock_month(pnl.stock_month(conn, cfg)),
             stock_month=(pnl.stock_month(conn, cfg) or {}).get("month", ""),
         )
-        trend_block = string.Template(
-            (PART / "_trend.html").read_text(encoding="utf-8")).substitute(
-            voyage=screen.voyage(month),
-            actual_days=month["actual_days"], remaining_days=month["remaining_days"],
-            year_view=screen.year_view(year), year_verdict=screen.year_verdict(year),
-            **dept_charts)
         howto_block = (PART / "_howto.html").read_text(encoding="utf-8")
         health_block = ('<section><h2>正常に回っているか%s</h2>%s</section>'
                         % (screen.hint("人時生産性"),
@@ -617,6 +670,7 @@ def build(instance, verbose=False, nav=False, scope=None):
     (out / "summary.json").write_text(json.dumps({
         "generated": datetime.datetime.now().isoformat(timespec="seconds"),
         "stamp": datetime.datetime.now().strftime("%Y%m%d-%H%M"),
+        "scale": scale_of(conn, cfg, book),
         "metric": metric["formula"],
         "window": [dates[-window], dates[-1]],
         "estimated_days": len(est_in_window),
@@ -629,6 +683,12 @@ def build(instance, verbose=False, nav=False, scope=None):
             for name, r in results.items()},
         "trend_cards": trend_cards,
         "stock_chart_range": [stock_days[0], stock_days[-1]] if stock_days else None,
+        # 3つ目の問い。記事の照合も図解も、ここから数字を取る。
+        "gap": pnl.gap(conn, cfg, metric["yoy_offset_days"]),
+        "actions": ({"planned": _board["planned"], "landed": _board["landed"],
+                     "counted": len(_board["counted"]),
+                     "done": _board["by_state"]["効いた"],
+                     "overdue": len(_board["overdue"])}),
         # 年間の着地。記事の照合も、ここから数字を取る（記事に期待値を書き写さない）。
         "year": ({"label": year["this_year"]["label"], "budget": year["budget"],
                   "sales": year["this_year"]["sales"], "op": year["this_year"]["op"],

@@ -20,10 +20,25 @@ def money(value, sign=False):
     return "%s%s万円" % (head, format(value / 1e4, ",.0f"))
 
 
+# 強く塗る線。これを超えたズレだけを、はっきりした赤にする。
+LOUD = 10.0
+
+
 def pct(value, good_high=True, unit="%"):
+    """**誤差圏と大きなズレを、同じ濃さで塗らない。**
+
+    -0.7% も -24.6% も同じ赤だと、画面の赤が50箇所になり、どれが本当にまずいのか
+    分からなくなる（2026-09-05、実際にそうなっていた）。全部が赤いと、どれも赤くない。
+    大きいものだけをはっきり塗り、小さいものは向きが分かる程度に落とす。
+    """
     if value is None:
         return '<span class="flat">—</span>'
-    cls = "flat" if abs(value) < 0.5 else ("up" if (value > 0) == good_high else "down")
+    if abs(value) < 0.5:
+        return '<span class="flat">%+.1f%s</span>' % (value, unit)
+    good = (value > 0) == good_high
+    cls = "up" if good else "down"
+    if abs(value) < LOUD:
+        cls += " soft"
     return '<span class="%s">%+.1f%s</span>' % (cls, value, unit)
 
 

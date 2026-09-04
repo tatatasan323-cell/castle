@@ -64,14 +64,19 @@ nav b{color:var(--accent);font-weight:600;text-shadow:var(--glow)}
 .eyebrow{color:var(--muted);font-size:12px;letter-spacing:.14em}
 h1{font-size:23px;font-weight:600;margin:4px 0 4px;letter-spacing:.06em}
 .sub,.lead{color:var(--muted);font-size:12.5px}
+/* 節の見出し。**節が11個ある画面では、切れ目が目で分かることが効く。**
+   小さな飾り文字にしていた頃は節が3つだったが、増えたら中の見出しに負けた
+   ── 2026-09-05、h2 12.5px が h3 13.5px より小さく、階層が逆になっていた。 */
 h2{
-  font-size:12.5px;font-weight:600;color:var(--accent-dim);
-  letter-spacing:.16em;margin:40px 0 12px;
-  padding-bottom:8px;border-bottom:1px solid var(--line);
+  font-size:17px;font-weight:600;color:var(--ink);
+  letter-spacing:.06em;margin:46px 0 14px;
+  padding-bottom:9px;border-bottom:1px solid var(--line-2);
 }
-h3{font-size:13.5px;font-weight:600;margin:20px 0 4px}
+h3{font-size:15px;font-weight:600;margin:22px 0 4px;color:var(--accent)}
 
 .up{color:var(--ok)} .down{color:var(--bad)} .flat{color:var(--muted)}
+/* 誤差圏は、向きが分かる程度に落とす。**全部が赤いと、どれも赤くない。** */
+.up.soft,.down.soft{opacity:.55;font-weight:400}
 b,strong{font-weight:600}
 
 /* 面 ── 半透明。縁の上辺だけを光らせて、板が浮いているように見せる */

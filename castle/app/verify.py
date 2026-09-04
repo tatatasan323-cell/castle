@@ -1653,6 +1653,67 @@ def _run(instance):
     check("同じ用語の印を繰り返していない", not dupes,
           "／".join("%s %d回" % (d, labels.count(d)) for d in dupes) or "重複なし")
 
+
+    # **見出しは大中小の順に大きい。** 節が3つのときは目立たない寸法でよかったが、
+    # 11節になると「どこが節の切れ目か」が目で分からなくなる。
+    # 2026-09-05、h2（節）12.5px が h3（節の中）13.5〜15px より小さく、階層が逆だった。
+    import re as _re5
+
+    def _size(rule):
+        # 規則の始まりだけを見る。コメントの中の "h3" を拾わないよう、行頭に錨を打つ
+        # ── 2026-09-05、自分で書いたコメントの h3 を拾って別の値を返していた。
+        m = _re5.search(r"^" + rule + r"[^{]*\{[^}]*font-size:([\d.]+)px",
+                        css32, _re5.S | _re5.M)
+        return float(m.group(1)) if m else None
+
+    size1, size2, size3 = _size(r"\bh1"), _size(r"\bh2"), _size(r"\bh3")
+    check("見出しの大きさが階層どおり（h1 > h2 > h3）",
+          None not in (size1, size2, size3) and size1 > size2 > size3,
+          "h1 %s / h2 %s / h3 %s" % (size1, size2, size3))
+    inner = _size(r"\.panel-box h3")
+    check("節の中の見出しが、節の見出しを超えない",
+          inner is None or (size2 is not None and inner <= size2),
+          "節 %s / 節の中 %s" % (size2, inner))
+    # 節が増えるほど、切れ目が見えることが効く
+    check("節の見出しに区切りが付いている", "border-bottom" in
+          (_re5.search(r"\bh2[^{]*\{[^}]*\}", css32, _re5.S) or _re5.Match).group(0)
+          if _re5.search(r"\bh2[^{]*\{[^}]*\}", css32, _re5.S) else False)
+
+
+    # **記事が「大事な3つ」と言うなら、画面もそう見えていなければならない。**
+    # 11節が同じ重さで並んでいると、どれが本題か読み手に伝わらない。
+    heads = _re5.findall(r"<h2>(.*?)</h2>", board32, _re5.S)
+    plain_heads = [_re5.sub("<[^>]+>", "", h).strip() for h in heads]
+    check("節の見出しが並んでいる", len(heads) >= 8, "%d節" % len(heads))
+    numbered = [h for h in heads if 'class="q"' in h]
+    check("大事な3つに番号が振ってある", len(numbered) == 3, "%d件" % len(numbered))
+    check("番号が 1・2・3 の順に並んでいる",
+          [_re5.search(r'class="q">(\d)', h).group(1) for h in numbered] == ["1", "2", "3"])
+
+    # 経営者が最初に見るのは着地。**締めを待たずに見えることが、この画面の値打ち。**
+    order = {h: i for i, h in enumerate(plain_heads)}
+    landing_at = next((i for h, i in order.items() if "着地の見通し" in h), None)
+    first_q = next((i for h, i in order.items() if h.startswith("1")), None)
+    check("着地の見通しが、3つの問いより前にある",
+          landing_at is not None and first_q is not None and landing_at < first_q,
+          "着地 %s / 1つ目 %s" % (landing_at, first_q))
+    check("3つの問いが続けて並んでいる",
+          first_q is not None
+          and [i for h, i in order.items() if h[:1] in "123"] == [first_q, first_q + 1, first_q + 2],
+          str([h[:20] for h in plain_heads[first_q:first_q + 3]]) if first_q is not None else "")
+
+
+    # **全部が赤いと、どれも赤くない。** 誤差圏まで同じ濃さで塗ると、強調が効かなくなる
+    # ── 2026-09-05、画面の赤が50箇所あり、-0.7% と -24.6% が同じ見た目だった。
+    loud = [float(v.rstrip("%")) for v in
+            _re5.findall(r'class="down">([+-][\d.]+)%<', board32)]
+    soft = _re5.findall(r'class="down soft">', board32)
+    check("小さなズレを強い赤で塗っていない",
+          all(abs(v) >= screen.LOUD for v in loud),
+          "強く塗った最小 %.1f%%（線は %.0f%%）" % (min(map(abs, loud)) if loud else 0, screen.LOUD))
+    check("弱い赤も使われている（2段階になっている）", len(soft) >= 5, "%d箇所" % len(soft))
+    check("強い赤が多すぎない", len(loud) <= 40, "%d箇所" % len(loud))
+
     check("JavaScriptは1行も無いまま", "<script" not in board32)
 
     print("")
