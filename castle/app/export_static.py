@@ -78,7 +78,7 @@ def main():
             "index.html": ((instance / "out" / "dashboard.html").read_text(encoding="utf-8"), False),
             "note.html": (serve.render_note_page(instance, conn, cfg), True),
             "knowledge.html": (serve.render_knowledge_page(conn, cfg, None), True),
-            "guide.html": (serve.render_guide_page(cfg, None), False),
+            "guide.html": (serve.render_guide_page(cfg, None, conn), False),
         }
         for name, (page, read_only) in pages.items():
             (out / name).write_text(flatten(page, read_only), encoding="utf-8")

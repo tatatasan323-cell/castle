@@ -61,6 +61,30 @@ def settled_value(by_month, month, key):
     return (by_month[max(older)].get(key), True) if older else (None, True)
 
 
+def asof(conn):
+    """この画面がいつの話か。**どの画面の頭にも、同じものを置く。**
+
+    2026-09-07、画面を下へ送るうちに「これは何月の着地か」が見えなくなっていた。
+    月・実績の最終日・残りの営業日・確定した月 ── 着地を読むのに要る4つだけ。
+    数え方は [[build]] と同じにする（違えば、頭と本文で日数が食い違う）。
+    """
+    sales, _ = load_daily(conn)
+    if not sales:
+        return None
+    all_days = sorted({d for by in sales.values() for d in by})
+    last = all_days[-1]
+    month = _month_of(last)
+    calendar = month_calendar(month, business_weekdays(all_days))
+    have = set(all_days)
+    settled = sorted({m for rows in load_monthly(conn).values() for m in rows if m < month})
+    return {
+        "month": month, "last_actual": last,
+        "actual_days": len([d for d in calendar if d in have]),
+        "remaining_days": len([d for d in calendar if d > last]),
+        "settled_through": settled[-1] if settled else None,
+    }
+
+
 def business_weekdays(dates):
     """データのある曜日を営業曜日とみなす。暦の前提をコードに埋め込まない。"""
     seen = {datetime.date.fromisoformat(d).weekday() for d in dates}

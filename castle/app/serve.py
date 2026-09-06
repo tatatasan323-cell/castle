@@ -39,6 +39,7 @@ import config as config_mod
 import db
 import knowledge
 import promote
+import pnl
 import screen
 import oidc
 import sessions
@@ -170,12 +171,13 @@ def recent_notes(conn, limit=10):
 
 # ---------------------------------------------------------------- 画面
 
-def render_guide_page(cfg, identity):
+def render_guide_page(cfg, identity, conn=None):
     """使い方は認証の外に置く ── 鍵を持っていない人が「鍵の貰い方」を読めないと詰む。
 
-    そのかわり、この画面には会社の数字を一切出さない。
+    そのかわり、この画面には会社の金額を一切出さない。
+    いつの話か（何月・いつまで）の帯だけは、他の画面と揃える。
     """
-    nav = screen.nav("/guide", logout=bool(identity))
+    nav = screen.nav("/guide", logout=bool(identity), asof=pnl.asof(conn) if conn else None)
     return string.Template(GUIDE_TEMPLATE.read_text(encoding="utf-8")).substitute(
         theme=theme(),
         company=html.escape(cfg.company), nav=nav)
@@ -286,7 +288,7 @@ def render_knowledge_page(conn, cfg, identity, params=None, message="", scope=No
                     if identity else
                     '<input type="text" id="k_author" name="author" maxlength="30" required>')
 
-    nav = screen.nav("/knowledge", logout=True)
+    nav = screen.nav("/knowledge", logout=True, asof=pnl.asof(conn))
 
     return string.Template(KNOWLEDGE_TEMPLATE.read_text(encoding="utf-8")).substitute(
         theme=theme(),
@@ -347,7 +349,7 @@ def render_note_page(instance, conn, cfg, message="", author="", default_day="",
                         % (html.escape(author), MAX_AUTHOR))
 
     return string.Template(NOTE_TEMPLATE.read_text(encoding="utf-8")).substitute(
-        theme=theme(), nav=screen.nav("/note", logout=bool(identity)),
+        theme=theme(), nav=screen.nav("/note", logout=bool(identity), asof=pnl.asof(conn)),
         company=html.escape(cfg.company),
         message=message,
         today=html.escape(default_day or latest_data_day(conn)),
@@ -538,7 +540,7 @@ def make_server(instance, port=8765, host="127.0.0.1"):
                                 hours=int((cfg.auth or {}).get("session_hours", 8)))))
 
                 if path == "/guide":
-                    return self._send(render_guide_page(cfg, self._identity()))
+                    return self._send(render_guide_page(cfg, self._identity(), conn))
                 if path == "/login" or self._needs_login():
                     return self._send(render_login_page(cfg))
                 if path == "/":

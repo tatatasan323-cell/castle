@@ -1719,6 +1719,23 @@ def _run(instance):
     check("タブに枠か背景が付いている（押せる物に見える）",
           _re5.search(r"^nav a\.tab\{[^}]*(border|background)", css34, _re5.S | _re5.M) is not None)
 
+    # ── 2026-09-07、下へ送るうちに「何月の着地か」が見えなくなっていた。
+    # 全画面の頭に同じ帯を置き、タブごと動かないようにする。
+    bars34 = {}
+    for name in pages:
+        page = (out34 / name).read_text(encoding="utf-8")
+        start = page.find('<div class="when">')
+        bars34[name] = page[start:page.find("</div>", start)] if start >= 0 else ""
+        check("%s に「いつの話か」の帯がある" % name, bool(bars34[name]))
+    check("4画面の帯が同じ文面", len(set(bars34.values())) == 1, "%d通り" % len(set(bars34.values())))
+    month34 = json.loads((instance / "out" / "summary.json").read_text(encoding="utf-8"))["gap"]["month"]["month"]
+    check("帯が当月を言っている（%s）" % month34,
+          "%d年%d月の着地" % (int(month34[:4]), int(month34[5:7])) in bars34["index.html"])
+    check("帯に、実績の最終日と確定の月がある",
+          "実績" in bars34["index.html"] and "確定は" in bars34["index.html"])
+    check("帯とタブが、下へ送っても残る（sticky）",
+          _re5.search(r"^nav\{[^}]*position:sticky", css34, _re5.S | _re5.M) is not None)
+
     print("")
     print("【32】常時見えるのは数字。解説は、要るときだけ出す")
     # **毎日見る人には、解説は邪魔になる。** はじめての人には要る。

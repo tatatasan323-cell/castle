@@ -56,9 +56,20 @@ body{
    飾り文字のままだと、タブがあると分からず戻れなくなる。 */
 nav{
   display:flex;gap:8px;flex-wrap:wrap;font-size:13.5px;letter-spacing:.02em;
-  padding-bottom:0;margin-bottom:24px;
+  padding:6px 0 0;margin-bottom:24px;
   border-bottom:1px solid var(--line-2);
+  /* 下へ送っても、いつの話かとタブは残る。板は背景をほぼ塗りつぶす（透けると読めない） */
+  position:sticky;top:0;z-index:20;
+  background:rgba(5,8,12,.93);backdrop-filter:blur(8px);
 }
+/* いつの話か。**全画面で同じ文面** ── 画面ごとに書き分けると、片方だけ古くなる */
+nav .when{
+  flex-basis:100%;display:flex;flex-wrap:wrap;align-items:baseline;
+  font-size:13px;color:var(--muted);padding:2px 2px 8px;letter-spacing:.02em;
+  font-variant-numeric:tabular-nums;
+}
+nav .when b{color:var(--ink);font-size:16px;font-weight:600;letter-spacing:.06em;margin-right:8px}
+nav .when .sep{color:var(--line-2);margin:0 8px}
 nav a.tab{
   color:var(--muted);text-decoration:none;padding:9px 18px;
   border:1px solid var(--line);border-bottom:none;

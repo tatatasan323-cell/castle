@@ -646,7 +646,7 @@ def build(instance, verbose=False, nav=False, scope=None):
         stamp=datetime.datetime.now().strftime("%Y%m%d-%H%M"),
         last_actual=month["last_actual_date"],
         actual_days=month["actual_days"], remaining_days=month["remaining_days"],
-        nav=('<nav>%s</nav>' % screen.nav("/", logout=True)) if nav else "",
+        nav=('<nav>%s</nav>' % screen.nav("/", logout=True, asof=pnl.asof(conn))) if nav else "",
         notice=(LIMITED % "・".join(sorted(scope)) + notice) if scope is not None else notice,
         company_block=company_block,
         trend_block=trend_block,

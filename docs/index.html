@@ -63,9 +63,20 @@ body{
    飾り文字のままだと、タブがあると分からず戻れなくなる。 */
 nav{
   display:flex;gap:8px;flex-wrap:wrap;font-size:13.5px;letter-spacing:.02em;
-  padding-bottom:0;margin-bottom:24px;
+  padding:6px 0 0;margin-bottom:24px;
   border-bottom:1px solid var(--line-2);
+  /* 下へ送っても、いつの話かとタブは残る。板は背景をほぼ塗りつぶす（透けると読めない） */
+  position:sticky;top:0;z-index:20;
+  background:rgba(5,8,12,.93);backdrop-filter:blur(8px);
 }
+/* いつの話か。**全画面で同じ文面** ── 画面ごとに書き分けると、片方だけ古くなる */
+nav .when{
+  flex-basis:100%;display:flex;flex-wrap:wrap;align-items:baseline;
+  font-size:13px;color:var(--muted);padding:2px 2px 8px;letter-spacing:.02em;
+  font-variant-numeric:tabular-nums;
+}
+nav .when b{color:var(--ink);font-size:16px;font-weight:600;letter-spacing:.06em;margin-right:8px}
+nav .when .sep{color:var(--line-2);margin:0 8px}
 nav a.tab{
   color:var(--muted);text-decoration:none;padding:9px 18px;
   border:1px solid var(--line);border-bottom:none;
@@ -405,13 +416,13 @@ section.notes .note{padding:13px 17px;margin-bottom:8px}
 <body>
 <div class="wrap">
 
-<nav><a class="tab here" href="index.html" aria-current="page">経営ステータス</a><a class="tab" href="note.html">申し送り</a><a class="tab" href="knowledge.html">知識の泉</a><a class="tab" href="guide.html">使い方</a></nav>
+<nav><div class="when"><b>2026年8月の着地</b><span class="sep">／</span>実績 8月12日まで（10営業日）＋ 見込み 16営業日<span class="sep">／</span>確定は7月まで</div><a class="tab here" href="index.html" aria-current="page">経営ステータス</a><a class="tab" href="note.html">申し送り</a><a class="tab" href="knowledge.html">知識の泉</a><a class="tab" href="guide.html">使い方</a></nav>
 
 <header>
   <div class="eyebrow">架空食品商事株式会社</div>
   <h1>経営ステータス</h1>
-  <div class="sub">2026-09-07 00:15 時点 ／ データは 2026-08-12 まで届いています
-    <span class="stamp" title="この画面の版。URLの ?v= と一致していれば最新です">版 20260907-0015</span></div>
+  <div class="sub">2026-09-07 00:24 に生成
+    <span class="stamp" title="この画面の版。URLの ?v= と一致していれば最新です">版 20260907-0024</span></div>
 </header>
 
 <div class="notice"><b>当月は、会計の締めを待たずに出した着地です。</b>売上と労働時間は日次の実績。原価率は週次の棚卸から（棚卸が届いていない先の日は直近の週の率）。人時単価は直近の確定月（賞与は引当なので、月ごとにはほぼ動きません）。</div>
@@ -551,6 +562,8 @@ section.notes .note{padding:13px 17px;margin-bottom:8px}
 <p>いちばん上に、サイロごとの<b>最終データ日</b>を置いています。
 自動で取り込むようにするほど「今日も動いたはず」と思い込むので、
 <b>届いていなければ画面のほうから言います</b>。遅れているものは赤で名指しします。</p>
+<p>タブの上の帯は、この画面が<b>いつの話か</b>です ── 何月の着地か、実績はいつまでか、確定はいつまでか。
+どの画面にも同じ帯があり、下へ送っても残ります。</p>
 
 <h3>4. 着地の見通し ── 今月と、年間</h3>
 <p>会社の損益は<b>月ごとに確定して、年間へ積み上がります</b>。だから見る目は2つ。

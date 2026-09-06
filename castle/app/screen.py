@@ -72,7 +72,24 @@ PAGES = (("/", "経営ステータス"), ("/note", "申し送り"),
          ("/knowledge", "知識の泉"), ("/guide", "使い方"))
 
 
-def nav(current="/", logout=False):
+def when(asof):
+    """いつの話か。**タブの上に、全画面同じ帯で置く。**
+
+    本文の数字はどれも「当月の着地」の話だが、下へ送るとそれが見えなくなる。
+    何月の着地か・実績はいつまでか・確定はいつまでか ── この3つを、動かない帯にする。
+    """
+    if not asof:
+        return ""
+    last = asof["last_actual"]
+    bits = ["<b>%d年%d月の着地</b>" % (int(asof["month"][:4]), int(asof["month"][5:7])),
+            "実績 %d月%d日まで（%d営業日）＋ 見込み %d営業日"
+            % (int(last[5:7]), int(last[8:10]), asof["actual_days"], asof["remaining_days"])]
+    if asof.get("settled_through"):
+        bits.append("確定は%d月まで" % int(asof["settled_through"][5:7]))
+    return '<div class="when">%s</div>' % '<span class="sep">／</span>'.join(bits)
+
+
+def nav(current="/", logout=False, asof=None):
     """画面の行き来。**全部の画面に、同じものを置く。**
 
     どこかの画面でタブが消えると、そこから戻れなくなる
@@ -90,7 +107,7 @@ def nav(current="/", logout=False):
                        ' aria-current="page"' if here else "", label))
     if logout:
         tabs.append('<a class="tab quit" href="/logout">閉じる</a>')
-    return "".join(tabs)
+    return when(asof) + "".join(tabs)
 
 
 def hint(term, align="center"):
