@@ -1281,6 +1281,10 @@ def _run(instance):
         floor24 = -abs(year["last_year"]["op"]) * 0.03
         black24 = [m for m in per24 if prior24[m[5:7]] < floor24 and per24[m] > 0]
         check("前期が赤字だった月に、黒字の予算を置いていない", not black24, "黒字の予算: %s" % black24)
+        # 赤字の月の予算は「これ以上は失わない」上限。前期より大きい赤字を予算にすれば、それは狙いになる。
+        # 2026-09-07、前期×1.10の形で置いたら、1〜2月だけ前期より緩くなっていた。
+        loose24 = [m for m in per24 if prior24[m[5:7]] < floor24 and per24[m] <= prior24[m[5:7]]]
+        check("赤字の月の予算が、前期の赤字より縮んでいる", not loose24, "前期より緩い: %s" % loose24)
         peak24 = max(per24, key=per24.get)[5:7]
         peak_ly24 = max(prior24, key=prior24.get)
         check("予算の山の月が、前期の山の月と同じ", peak24 == peak_ly24,
