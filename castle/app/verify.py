@@ -460,6 +460,21 @@ def _run(instance):
           "数量減は意図的" in html and html.count('class="attached"') > 0,
           "申し送り %s ／ 知識の添付 %d箇所"
           % ("あり" if "数量減は意図的" in html else "無し", html.count('class="attached"')))
+    # ── 2026-09-06、「年間の着地」が何の着地か、タブに書いていなかった。
+    check("年間のタブに、何の着地かが書いてある", "年間の着地（営業利益）" in top)
+    ysvg = top[top.index('aria-label="年間の着地"'):]
+    ysvg = ysvg[:ysvg.index("</svg>")]
+    warn_lines = [p for p in ysvg.split("<polyline")[1:] if 'stroke="var(--warn)"' in p]
+    pts = warn_lines[0].split('points="')[1].split('"')[0].split() if warn_lines else []
+    check("年間の絵で、予算が累計で引かれている（12点の線）", len(pts) == 12, "%d点" % len(pts))
+    check("年間の累計に触れると、累計予算との差が出る", ysvg.count("累計予算") == 12,
+          "%d箇所" % ysvg.count("累計予算"))
+    bsvg = top[top.index('aria-label="月ごとの営業利益"'):]
+    bsvg = bsvg[:bsvg.index("</svg>")]
+    check("月ごとの棒に触れると、その月の数字が出る", bsvg.count("<title>") == 12,
+          "%d本" % bsvg.count("<title>"))
+    check("年間の判定が、予算をいちばん割っている月を名指ししている", "予算をいちばん割っているのは" in top)
+    check("赤字の月を「足を引く」と言っていない（予算に織り込み済み）", "足を引いています" not in top)
     check("推移の切り替えが4枚ある（今月の着地／年間の着地／部門別の額／部門別の率）",
           top.count('class="panel"') == 4, "CSSタブ %d枚" % top.count('class="panel"'))
     # タブは「切り替わって初めてタブ」。入口・見出し・中身の3つが揃っているかを見る。
@@ -1251,6 +1266,28 @@ def _run(instance):
     check("年間の着地が前期と比べられる", year["last_year"]["op"] != 0,
           "前期の営業利益 %s" % yen_(year["last_year"]["op"]))
 
+    # ── 2026-09-06、予算の月の形が実態と合っていなかった。売上向けの重み（0.8〜1.2）を
+    # 営業利益に当てていたので、前期が赤字の2月に黒字の予算が立ち、前期7,300万の12月に
+    # 2,700万の予算が立っていた。**利益の季節差は売上の季節差よりずっと大きい**（固定費は減らない）。
+    per24 = year["monthly_budget"]
+    prior24 = {m["month"][5:7]: m["op"] for m in year["last_year"]["months"]}
+    check("営業利益の予算が12ヶ月ぶん置いてある", len(per24) == 12, "%dヶ月" % len(per24))
+    if len(per24) == 12:
+        bud24 = [per24[m] for m in per24]
+        ly24 = [prior24[m[5:7]] for m in per24]
+        swing24 = (max(bud24) - min(bud24)) / ((max(ly24) - min(ly24)) or 1.0)
+        check("予算の山と谷の差が、前期の山と谷の差と同じ桁（0.6〜1.6倍）",
+              0.6 <= swing24 <= 1.6, "%.2f倍" % swing24)
+        floor24 = -abs(year["last_year"]["op"]) * 0.03
+        black24 = [m for m in per24 if prior24[m[5:7]] < floor24 and per24[m] > 0]
+        check("前期が赤字だった月に、黒字の予算を置いていない", not black24, "黒字の予算: %s" % black24)
+        peak24 = max(per24, key=per24.get)[5:7]
+        peak_ly24 = max(prior24, key=prior24.get)
+        check("予算の山の月が、前期の山の月と同じ", peak24 == peak_ly24,
+              "予算 %s月 ／ 前期 %s月" % (peak24, peak_ly24))
+        check("月の予算の合計が年間予算", abs(sum(per24.values()) - year["budget"]) < 1.0,
+              "合計 %.0f ／ 年間 %.0f" % (sum(per24.values()), year["budget"]))
+
     # 賞与は引当でならす。だから損益は跳ねない ── 跳ねたら年間の着地が読めない。
     # 「支給月に人件費が跳ねる」判定を最初に書いたが、それは会計の実務として誤り。
     # 資金のほうは跳ねる。**損益と資金は別に動く。** 両方を見る。
@@ -1633,7 +1670,8 @@ def _run(instance):
         check("「%s」の読み方がある" % section, not missing, "触れていない語: %s" % missing)
 
     # 消した仕組みの説明が残っていないか（読み手はそれを探して迷う）
-    gone = [w for w in ("移動平均", "在庫日数を当てた", "どこで消えたか") if w in both35]
+    gone = [w for w in ("移動平均", "在庫日数を当てた", "どこで消えたか",
+                        "直近の確定月の原価率", "12等分") if w in both35]
     check("消した仕組みの説明が残っていない", not gone, "残り: %s" % gone)
 
     # 画面の言葉と、説明の言葉が揃っているか

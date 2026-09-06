@@ -265,6 +265,14 @@ def _stack(labels, gap=15.0, low=14.0, high=None):
     return out
 
 
+STATE_WORD = {"確定": "確定", "当月": "当月の見込み", "予測": "予測"}
+
+
+def _side(diff):
+    """累計が予算の上か下か。"""
+    return "%s%s" % (money(abs(diff)), "上" if diff >= 0 else "下")
+
+
 def year_view(year, width=940):
     """年間の着地。**会社の損益は月ごとに確定し、それが年間へ積み上がる。**
 
@@ -326,10 +334,17 @@ def year_view(year, width=940):
         else:
             style = ('fill="%s" fill-opacity=".10" stroke="%s" stroke-width="1.4" '
                      'stroke-dasharray="4 3"' % (color, color))
-        out.append('<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" rx="2" %s/>'
-                   % (cx - bw / 2, y, bw, max(hgt, 1.0), style))
         # 前期の同じ月。棒の上に横棒で置く ── 伸びたか縮んだかが、目盛りを読まずに分かる。
         back = prior.get(m["month"][5:7])
+        # 棒に触れると、その月の数字が出る（SVGの title。JavaScriptは要らない）。常時見せるのは形だけ。
+        # 2026-09-06、1〜2月で累計が横ばいになる理由を、絵から読めなかった。
+        tip = "%d月（%s）営業利益 %s" % (int(m["month"][5:7]), STATE_WORD[m["state"]], money(v))
+        if per_month.get(m["month"]) is not None:
+            tip += " ／ 予算 %s" % money(per_month[m["month"]])
+        if back:
+            tip += " ／ 前期同月 %s" % money(back["op"])
+        out.append('<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" rx="2" %s>'
+                   "<title>%s</title></rect>" % (cx - bw / 2, y, bw, max(hgt, 1.0), style, tip))
         if back:
             out.append('<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="var(--prior)" '
                        'stroke-width="2.4"/>'
@@ -347,7 +362,16 @@ def year_view(year, width=940):
     for m in year["last_year"]["months"]:
         acc_p += m["op"]
         cum_prior.append(acc_p)
-    pool = cum + cum_prior + ([budget] if budget else []) + [0.0]
+    # 予算も累計で引く。年間の1本線では年度末まで比べられない ──
+    # 社長が見るのは「いまの月末で、予算より上か下か」。2026-09-06。
+    cum_budget, acc_b = [], 0.0
+    for m in rows:
+        if per_month.get(m["month"]) is None:
+            cum_budget = []
+            break
+        acc_b += per_month[m["month"]]
+        cum_budget.append(acc_b)
+    pool = cum + cum_prior + cum_budget + [0.0]
     lo2, hi2 = min(pool), max(pool)
     span2 = (hi2 - lo2) or abs(hi2) or 1.0
     lo2, hi2 = lo2 - span2 * 0.10, hi2 + span2 * 0.14
@@ -364,9 +388,9 @@ def year_view(year, width=940):
     if lo2 < 0 < hi2:
         out.append('<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" stroke="var(--line)" stroke-width="1"/>'
                    % (pad, y2(0.0), right, y2(0.0)))
-    if budget:
-        out.append('<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" stroke="var(--warn)" stroke-width="1.2" '
-                   'stroke-dasharray="5 4"/>' % (pad, y2(budget), right, y2(budget)))
+    if cum_budget:
+        out.append('<polyline fill="none" stroke="var(--warn)" stroke-width="1.2" '
+                   'stroke-dasharray="5 4" points="%s"/>' % line(cum_budget))
     out.append('<polyline fill="none" stroke="var(--prior)" stroke-width="2" points="%s"/>'
                % line(cum_prior))
     out.append('<polyline fill="none" stroke="var(--bar)" stroke-width="3" stroke-linejoin="round" '
@@ -380,6 +404,16 @@ def year_view(year, width=940):
                "確定はここまで</text>" % (x_of(cut), h2 - 8))
     out.append('<circle cx="%.1f" cy="%.1f" r="4" fill="none" stroke="var(--bar)" stroke-width="2"/>'
                % (x_of(n - 1), y2(cum[-1])))
+    # 月末ごとの当たり判定。触れると、累計と累計予算の差が出る。
+    for i, m in enumerate(rows):
+        tip = "%d月末 累計 %s" % (int(m["month"][5:7]), money(cum[i]))
+        if cum_budget:
+            tip += " ／ 累計予算 %s（%s）" % (money(cum_budget[i]),
+                                          money(cum[i] - cum_budget[i], sign=True))
+        if i < len(cum_prior):
+            tip += " ／ 前期 %s" % money(cum_prior[i])
+        out.append('<circle cx="%.1f" cy="%.1f" r="11" fill="#000" fill-opacity="0" '
+                   'pointer-events="all"><title>%s</title></circle>' % (x_of(i), y2(cum[i]), tip))
 
     tags = [(y2(cum[-1]), "着地 " + money(cum[-1]), "var(--ink)", 13, 700),
             (y2(cum_prior[-1]), "前期 " + money(cum_prior[-1]), "var(--prior)", 11, 400)]
@@ -430,11 +464,22 @@ def year_verdict(year):
                 "当てた予測です。"
                 % (money(back["op"]), pct(vs_ly), int(settled[-1]["month"][5:7]),
                    int(now["months"][len(settled)]["month"][5:7]), len(ahead) - 1))
-    worst = min(now["months"], key=lambda m: m["op"])
-    if worst["op"] < 0:
-        bits.append("<br>%d月は営業赤字の%s（%s）。ここが年間の足を引いています。"
-                    % (int(worst["month"][5:7]),
-                       "実績" if worst["state"] == "確定" else "見込み", money(worst["op"])))
+    per_month = year.get("monthly_budget") or {}
+    if per_month and settled and ahead:
+        # **赤字の月を名指ししない。** 1〜2月の赤字は予算にも織り込まれている。
+        # 名指しするのは、その月の予算をいちばん割っている月 ── 2026-09-06。
+        def diff(months):
+            return sum(m["op"] for m in months) - sum(per_month[m["month"]] for m in months)
+        current = ahead[0]
+        so_far, with_now = diff(settled), diff(settled + [current])
+        bits.append("<br>%d月末までの累計は予算より%s。%d月の見込みを足すと%s。"
+                    % (int(settled[-1]["month"][5:7]), _side(so_far),
+                       int(current["month"][5:7]), _side(with_now)))
+        short, worst = max(((per_month[m["month"]] - m["op"], m) for m in now["months"]),
+                           key=lambda t: t[0])
+        if short > 0:
+            bits.append("予算をいちばん割っているのは%d月（%s、%s）。"
+                        % (int(worst["month"][5:7]), STATE_WORD[worst["state"]], money(short)))
     bits.append("</p>")
     return "".join(bits)
 

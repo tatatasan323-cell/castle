@@ -432,19 +432,26 @@ def build_cash(cfg, month, balances, buys, by_date, ladder_block, yoy_offset, st
 
 
 def budget_weight(cfg, month):
-    """その月に、年間予算の何ヶ月ぶんを割り当てるか。
+    """その月に、部門粗利の年間予算の何ヶ月ぶんを割り当てるか。
 
     **実在の会社は年間予算を12等分しない。** 12月は伸び、2月は沈む。
     一律で置くと閑散月は毎年必ず全部門が未達になり、予算比の欄が読まれなくなる
     ── 偽陽性ばかりの警報は、安心ではなく麻痺を生む。
+
+    **営業利益にはこの重みを使わない。** 粗利は売上に比例するが、利益はしない ──
+    固定費は閑散月でも減らないので、売上が2割落ちる月は利益が消え、3割伸びる月は
+    利益が3倍になる。売上の配分比で利益予算を割ると、前期が赤字の2月に黒字の予算が立ち、
+    前期7,300万の12月に2,700万の予算が立つ。2026-09-06、画面でそう見えていた。
     """
     weights = (cfg.budget or {}).get("月別の重み") or {}
     return float(weights.get(str(int(month[5:7])), 1.0))
 
 
 def monthly_op_budget(cfg, month):
-    base = (cfg.budget or {}).get("monthly_operating_profit")
-    return base * budget_weight(cfg, month) if base else None
+    """その月の営業利益の予算。**予算書の行をそのまま置く。** 重みで割らない。"""
+    table = (cfg.budget or {}).get("営業利益の月別予算") or {}
+    value = table.get(str(int(month[5:7])))
+    return float(value) if value is not None else None
 
 
 def dept_gross_budget(cfg, month, dept):
@@ -614,7 +621,9 @@ def build_year(conn, cfg, yoy_offset=364):
     def total(items, key):
         return sum(x[key] for x in items)
 
-    base = (cfg.budget or {}).get("monthly_operating_profit")
+    # 年間予算は月の予算の合計。**年間を先に置いて月に割らない** ── 割った形は実態と合わない。
+    per_month = {m: monthly_op_budget(cfg, m) for m in this_months}
+    has_budget = all(v is not None for v in per_month.values())
     return {
         "start_month": start_month,
         "pace": pace,
@@ -624,10 +633,9 @@ def build_year(conn, cfg, yoy_offset=364):
         "last_year": {"label": "%s年度" % last_months[0][:4], "months": prior,
                       "sales": total(prior, "sales"), "gross": total(prior, "gross"),
                       "op": total(prior, "op")},
-        "budget": (sum(monthly_op_budget(cfg, m) for m in this_months)) if base else None,
+        "budget": sum(per_month.values()) if has_budget else None,
         # 月ごとの予算も返す。年間の絵の中で、山の月と谷の月に別の線を引くため。
-        "monthly_budget": ({m: monthly_op_budget(cfg, m) for m in this_months}
-                           if base else {}),
+        "monthly_budget": per_month if has_budget else {},
     }
 
 
