@@ -664,6 +664,7 @@ def build(instance, verbose=False, nav=False, scope=None):
 
     out = instance / "out"
     out.mkdir(exist_ok=True)
+    html = screen.scrollable(html)
     (out / "dashboard.html").write_text(html, encoding="utf-8")
 
     # 判定者が読む用。画面のHTMLを機械が読むのは脆いので、数字は別に出す。

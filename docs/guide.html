@@ -134,6 +134,30 @@ tbody tr{transition:background .15s}
 tbody tr:hover{background:rgba(94,224,240,.045)}
 tbody tr:last-child td{border-bottom:none}
 
+/* 表は横に逃がす。**スマホで列を潰して行を増やさない** ──
+   2026-09-08、375pxで段階利益の「出どころ」が1文字ずつ折れ、1行が321pxになっていた。
+   PC幅では枠は透明で何も変わらない。狭い幅でだけ、表は自分の幅を保ち、枠の中で横に送る。 */
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%;scrollbar-width:thin}
+.scroll table{min-width:100%}
+@media (max-width:720px){
+  .scroll table{width:max-content;min-width:100%}
+  .scroll th,.scroll td{white-space:nowrap}
+  .scroll td.note{white-space:normal;min-width:18em;max-width:24em}
+  .scroll table.ladder td.note{white-space:nowrap;max-width:none}
+  /* 横に送っても、どの行かが分かるように1列目は残す。
+     帯の行（tr.sub 等）は背景がグラデーションなので、それより強い指定で塗りつぶす
+     ── 透けると、送った先の数字が名前に重なる（2026-09-08、実機相当の描画で見えた） */
+  .scroll table thead tr th.name,.scroll table tbody tr td.name{
+    position:sticky;left:0;z-index:1;background:#0b141c;
+    box-shadow:2px 0 0 rgba(94,224,240,.12)}
+  /* いつの話かの帯とタブは、狭い幅では詰める。固定表示が画面の3分の1を食っていた */
+  nav{gap:4px;font-size:12px;margin-bottom:16px}
+  nav a.tab{padding:6px 9px;border-radius:8px 8px 0 0}
+  nav .when{font-size:11.5px;padding:0 0 5px}
+  nav .when b{font-size:14px;margin-right:6px}
+  nav .when .sep{margin:0 5px}
+}
+
 .none{padding:14px 18px;color:var(--muted);font-size:13.5px}
 
 .notice{border-left:2px solid var(--warn);padding:12px 18px;margin-top:18px;
@@ -294,11 +318,11 @@ python castle/app/intake.py --freshness  どこまで届いているかを見る
 </ul>
 
 <h3>書き方のコツ</h3>
-<table>
+<div class="scroll"><table>
   <tr><th>弱い書き方</th><th>効く書き方</th></tr>
   <tr><td>売上が落ちています</td><td>数量減は意図的。相場高で赤字取引を止めている。8月下旬に戻る見込み</td></tr>
   <tr><td>忙しかったです</td><td>盆前で休業の得意先が増え、1ルートの納品件数が落ちた。臨時要員は入れていない</td></tr>
-</table>
+</table></div>
 
 <p><b>「見込み」と「打った手」を書くと、読む側が判断できます。</b>
 状況だけだと、結局その部門に聞き直すことになります。</p>
@@ -345,7 +369,7 @@ python castle/app/intake.py --freshness  どこまで届いているかを見る
 「この件、また来年も同じことが起きるな」と思ったら、それは知識です。</p>
 
 <h3>書くときの3つの約束</h3>
-<table>
+<div class="scroll"><table>
   <tr><th>約束</th><th>なぜ</th></tr>
   <tr>
     <td><b>本質は一行（120字）</b></td>
@@ -361,7 +385,7 @@ python castle/app/intake.py --freshness  どこまで届いているかを見る
     <td><b>「どう使うか」を必ず書く</b></td>
     <td>次に同じ場面が来たときの行動が書いていないと、ただの感想です。</td>
   </tr>
-</table>
+</table></div>
 
 <h3>古くなった知識は、覆す</h3>
 <p>方針が変わったら、<b>書き換えるのではなく「これを覆す」を押して新しく書きます。</b>
@@ -426,7 +450,7 @@ python castle/app/backup.py --restore &lt;ファイル&gt; --yes   戻す</pre>
 <section>
 <h2>8. 困ったとき</h2>
 
-<table>
+<div class="scroll"><table>
   <tr><th>起きたこと</th><th>どうするか</th></tr>
   <tr>
     <td>取り込みで<br>「部門が対応表にない」と出た</td>
@@ -453,7 +477,7 @@ python castle/app/backup.py --restore &lt;ファイル&gt; --yes   戻す</pre>
     <td>控えから戻します。取り込み元のCSVが残っていれば、
         <code>verify.py</code> で作り直すこともできます。</td>
   </tr>
-</table>
+</table></div>
 </section>
 
 <section>

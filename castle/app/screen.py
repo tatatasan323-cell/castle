@@ -89,6 +89,17 @@ def when(asof):
     return '<div class="when">%s</div>' % '<span class="sep">／</span>'.join(bits)
 
 
+def scrollable(page):
+    """表を横スクロールの枠で包む。**スマホで列を潰して行を増やさない。**
+
+    2026-09-08、375pxで段階利益の「出どころ」が1文字ずつ折れ、1行が321pxになっていた。
+    出す側の関数それぞれで包むと、どれかが漏れる。出来上がった1枚に機械的に掛ける。
+    """
+    import re
+    return re.sub(r"<table\b.*?</table>",
+                  lambda m: '<div class="scroll">%s</div>' % m.group(0), page, flags=re.S)
+
+
 def nav(current="/", logout=False, asof=None):
     """画面の行き来。**全部の画面に、同じものを置く。**
 

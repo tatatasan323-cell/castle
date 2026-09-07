@@ -800,23 +800,33 @@ def _run(instance):
     import ast as _ast
     stdlib = set(sys.stdlib_module_names)
     local = {f.stem for f in APP.glob("*.py")}
-    used, where = set(), {}
-    for path in sorted(APP.glob("*.py")):
-        tree = _ast.parse(path.read_text(encoding="utf-8"))
-        for node in _ast.walk(tree):
-            if isinstance(node, _ast.Import):
-                names = [a.name for a in node.names]
-            elif isinstance(node, _ast.ImportFrom):
-                names = [node.module] if (node.level == 0 and node.module) else []
-            else:
-                continue
-            for name in names:
-                head = name.split(".")[0]
-                used.add(head)
-                where.setdefault(head, path.name)
-    outside = sorted(used - stdlib - local)
-    check("外部ライブラリを1つも使っていない", not outside,
+
+    def imports_of(paths):
+        used, where = set(), {}
+        for path in paths:
+            tree = _ast.parse(path.read_text(encoding="utf-8"))
+            for node in _ast.walk(tree):
+                if isinstance(node, _ast.Import):
+                    names = [a.name for a in node.names]
+                elif isinstance(node, _ast.ImportFrom):
+                    names = [node.module] if (node.level == 0 and node.module) else []
+                else:
+                    continue
+                for name in names:
+                    head = name.split(".")[0]
+                    used.add(head)
+                    where.setdefault(head, path.name)
+        return sorted(used - stdlib - local), where
+
+    # 城そのもの（動く側）は外から何も借りない。判定（この verify.py）だけは別に見る ──
+    # 画面を実機相当で描いて測るのに、ブラウザ（playwright）を借りる。2026-09-08。
+    # 借りるのはそれ1つで、無ければ判定が赤になるだけで城は動く（遅延 import）。
+    outside, where = imports_of(p for p in sorted(APP.glob("*.py")) if p.name != "verify.py")
+    check("外部ライブラリを1つも使っていない（城そのもの）", not outside,
           "、".join("%s（%s）" % (m, where[m]) for m in outside))
+    judge_outside, _ = imports_of([APP / "verify.py"])
+    check("判定が外から借りるのは、画面を見る目（playwright）だけ", judge_outside in ([], ["playwright"]),
+          "、".join(judge_outside))
 
     # 幅ゼロ・双方向制御・不可視の空白。目視は効かないので数えさせる。
     INVISIBLE = {0x00AD: "ソフトハイフン", 0x200B: "幅ゼロ空白", 0x200C: "幅ゼロ非結合",
@@ -1735,6 +1745,52 @@ def _run(instance):
           "実績" in bars34["index.html"] and "確定は" in bars34["index.html"])
     check("帯とタブが、下へ送っても残る（sticky）",
           _re5.search(r"^nav\{[^}]*position:sticky", css34, _re5.S | _re5.M) is not None)
+
+    print("")
+    print("【36】スマホで表が潰れない ── 横に逃がし、行を増やさない")
+    # 2026-09-08、375pxで段階利益の「出どころ」が1文字ずつ折れ、1行が321pxになっていた。
+    # 列を潰して縦に伸ばすのではなく、表ごと横にスクロールさせる。PC幅では何も変わらない。
+    for name in pages:
+        page = (out34 / name).read_text(encoding="utf-8")
+        check("%s の表がすべてスクロール枠の中にある" % name,
+              page.count("<table") == page.count('<div class="scroll"><table'),
+              "表 %d ／ 枠 %d" % (page.count("<table"), page.count('<div class="scroll"><table')))
+    check("枠が横にスクロールする指定がある", ".scroll{overflow-x:auto" in css34)
+    check("狭い幅で1列目を固定する指定がある", "position:sticky;left:0" in css34)
+    try:
+        from playwright.sync_api import sync_playwright as _pw36
+    except ImportError:
+        _pw36 = None
+    check("実機相当の描画で確かめられる（playwright）", _pw36 is not None)
+    if _pw36 is not None:
+        with _pw36() as pw36:
+            br36 = pw36.chromium.launch()
+            pg36 = br36.new_page(viewport={"width": 375, "height": 812})
+            pg36.goto((out34 / "index.html").resolve().as_uri())
+            pg36.wait_for_load_state("networkidle")
+            doc36 = pg36.evaluate("[document.documentElement.scrollWidth, document.documentElement.clientWidth]")
+            check("375pxで、画面そのものは横にはみ出さない", doc36[0] <= doc36[1], "%d / %d" % tuple(doc36))
+            box36 = pg36.evaluate("(() => { const s = document.querySelector('table.ladder').parentElement;"
+                                  " return [s.scrollWidth, s.clientWidth]; })()")
+            check("375pxで、段階利益の表は枠の中で横に送れる（潰れていない）", box36[0] > box36[1],
+                  "%d / %d" % tuple(box36))
+            tall36 = pg36.evaluate("Math.max(...Array.from(document.querySelectorAll('table.ladder tr'))"
+                                   ".map(r => r.getBoundingClientRect().height))")
+            check("375pxで、段階利益の1行が2行分を超えない", tall36 < 64, "最大 %dpx" % tall36)
+            # 帯とタブは固定表示。狭い幅で画面の3分の1を食っていたら、表を読む場所が無い
+            nav36 = pg36.evaluate("document.querySelector('nav').getBoundingClientRect().height")
+            check("375pxで、固定の帯とタブが120px以下", nav36 <= 120, "%dpx" % nav36)
+            # 固定した1列目が透けると、送った先の数字が名前に重なる（帯の行の背景がグラデーションのため）
+            cell36 = pg36.evaluate("(() => { const c = getComputedStyle(document.querySelector('table.ladder tr.sub td.name'));"
+                                   " return [c.backgroundColor, c.backgroundImage, c.position]; })()")
+            check("375pxで、固定した1列目が透けない",
+                  cell36[2] == "sticky" and cell36[1] == "none" and not cell36[0].startswith("rgba(0, 0, 0, 0)"),
+                  str(cell36))
+            pg36.set_viewport_size({"width": 1100, "height": 900})
+            wide36 = pg36.evaluate("Array.from(document.querySelectorAll('.scroll'))"
+                                   ".filter(s => s.scrollWidth > s.clientWidth).length")
+            check("PC幅では、どの表も横に送る必要がない（見た目が変わらない）", wide36 == 0, "%d枠" % wide36)
+            br36.close()
 
     print("")
     print("【32】常時見えるのは数字。解説は、要るときだけ出す")

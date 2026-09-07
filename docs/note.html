@@ -134,6 +134,30 @@ tbody tr{transition:background .15s}
 tbody tr:hover{background:rgba(94,224,240,.045)}
 tbody tr:last-child td{border-bottom:none}
 
+/* 表は横に逃がす。**スマホで列を潰して行を増やさない** ──
+   2026-09-08、375pxで段階利益の「出どころ」が1文字ずつ折れ、1行が321pxになっていた。
+   PC幅では枠は透明で何も変わらない。狭い幅でだけ、表は自分の幅を保ち、枠の中で横に送る。 */
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%;scrollbar-width:thin}
+.scroll table{min-width:100%}
+@media (max-width:720px){
+  .scroll table{width:max-content;min-width:100%}
+  .scroll th,.scroll td{white-space:nowrap}
+  .scroll td.note{white-space:normal;min-width:18em;max-width:24em}
+  .scroll table.ladder td.note{white-space:nowrap;max-width:none}
+  /* 横に送っても、どの行かが分かるように1列目は残す。
+     帯の行（tr.sub 等）は背景がグラデーションなので、それより強い指定で塗りつぶす
+     ── 透けると、送った先の数字が名前に重なる（2026-09-08、実機相当の描画で見えた） */
+  .scroll table thead tr th.name,.scroll table tbody tr td.name{
+    position:sticky;left:0;z-index:1;background:#0b141c;
+    box-shadow:2px 0 0 rgba(94,224,240,.12)}
+  /* いつの話かの帯とタブは、狭い幅では詰める。固定表示が画面の3分の1を食っていた */
+  nav{gap:4px;font-size:12px;margin-bottom:16px}
+  nav a.tab{padding:6px 9px;border-radius:8px 8px 0 0}
+  nav .when{font-size:11.5px;padding:0 0 5px}
+  nav .when b{font-size:14px;margin-right:6px}
+  nav .when .sep{margin:0 5px}
+}
+
 .none{padding:14px 18px;color:var(--muted);font-size:13.5px}
 
 .notice{border-left:2px solid var(--warn);padding:12px 18px;margin-top:18px;

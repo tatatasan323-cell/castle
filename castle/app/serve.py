@@ -178,9 +178,9 @@ def render_guide_page(cfg, identity, conn=None):
     いつの話か（何月・いつまで）の帯だけは、他の画面と揃える。
     """
     nav = screen.nav("/guide", logout=bool(identity), asof=pnl.asof(conn) if conn else None)
-    return string.Template(GUIDE_TEMPLATE.read_text(encoding="utf-8")).substitute(
+    return screen.scrollable(string.Template(GUIDE_TEMPLATE.read_text(encoding="utf-8")).substitute(
         theme=theme(),
-        company=html.escape(cfg.company), nav=nav)
+        company=html.escape(cfg.company), nav=nav))
 
 
 def render_knowledge_page(conn, cfg, identity, params=None, message="", scope=None):
@@ -290,7 +290,7 @@ def render_knowledge_page(conn, cfg, identity, params=None, message="", scope=No
 
     nav = screen.nav("/knowledge", logout=True, asof=pnl.asof(conn))
 
-    return string.Template(KNOWLEDGE_TEMPLATE.read_text(encoding="utf-8")).substitute(
+    return screen.scrollable(string.Template(KNOWLEDGE_TEMPLATE.read_text(encoding="utf-8")).substitute(
         theme=theme(),
         company=html.escape(cfg.company), nav=nav, message=message,
         query=html.escape(query),
@@ -304,7 +304,7 @@ def render_knowledge_page(conn, cfg, identity, params=None, message="", scope=No
         supersede_field=supersede_field, author_field=author_field,
         seed_essence=html.escape((seed or {}).get("essence", "")),
         seed_note=(seed or {}).get("from_note", ""),
-        write_open="open" if (supersede_field or seed) else "")
+        write_open="open" if (supersede_field or seed) else ""))
 
 
 def render_login_page(cfg, message=""):
@@ -348,7 +348,7 @@ def render_note_page(instance, conn, cfg, message="", author="", default_day="",
         author_field = ('<input type="text" id="author" name="author" value="%s" maxlength="%d" required>'
                         % (html.escape(author), MAX_AUTHOR))
 
-    return string.Template(NOTE_TEMPLATE.read_text(encoding="utf-8")).substitute(
+    return screen.scrollable(string.Template(NOTE_TEMPLATE.read_text(encoding="utf-8")).substitute(
         theme=theme(), nav=screen.nav("/note", logout=bool(identity), asof=pnl.asof(conn)),
         company=html.escape(cfg.company),
         message=message,
@@ -357,7 +357,7 @@ def render_note_page(instance, conn, cfg, message="", author="", default_day="",
         departments=options([d["name"] for d in cfg.measured()]),
         categories=options(cfg.note_categories),
         recent=recent,
-    )
+    ))
 
 
 # ── 回数制限 ──────────────────────────────────────────────
