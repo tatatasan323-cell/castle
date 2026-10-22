@@ -244,6 +244,36 @@ def _run(instance):
             check("POST /note が受理される", res.status in (200, 303), "HTTP %d" % res.status)
         n1 = conn.execute("SELECT COUNT(*) FROM records WHERE kind='申し送り'").fetchone()[0]
         check("POST で骨に1件増える", n1 == n0 + 1, "%d件 → %d件" % (n0, n1))
+
+        # 外からの口を閉じる検査（2026-10-22）：防御ヘッダ・Host の偽装（DNS rebinding）・別サイトからのPOST
+        import http.client
+        port = srv.server_address[1]
+
+        def raw(method, path, headers, body=None):
+            c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            c.request(method, path, body=body, headers=headers)
+            r = c.getresponse()
+            r.read()
+            hd = dict((k.lower(), val) for k, val in r.getheaders())
+            c.close()
+            return r.status, hd
+
+        st, hd = raw("GET", "/", {})
+        need = ("x-content-type-options", "x-frame-options", "referrer-policy", "content-security-policy", "cache-control")
+        check("画面に防御ヘッダが付く", st == 200 and all(k in hd for k in need), ", ".join(k for k in need if k not in hd))
+        st, _ = raw("GET", "/", {"Host": "evil.example:%d" % port})
+        check("Host が自分の名前でない要求は断る（DNS rebinding対策）", st == 403, "HTTP %d" % st)
+        st, _ = raw("GET", "/", {"Host": "localhost:%d" % port})
+        check("localhost という名前の要求は受ける", st == 200, "HTTP %d" % st)
+        post_h = {"Content-Type": "application/x-www-form-urlencoded"}
+        st, _ = raw("POST", "/note", dict(post_h, Origin="http://evil.example"), form)
+        n2 = conn.execute("SELECT COUNT(*) FROM records WHERE kind='申し送り'").fetchone()[0]
+        check("別のサイトからのPOSTは断り、骨が増えない", st == 403 and n2 == n1, "HTTP %d・%d件" % (st, n2))
+        st, _ = raw("POST", "/note", dict(post_h, **{"Sec-Fetch-Site": "cross-site"}), form)
+        check("ブラウザが cross-site と告げたPOSTも断る", st == 403, "HTTP %d" % st)
+        st, _ = raw("POST", "/note", dict(post_h, Origin=base), form)
+        n3 = conn.execute("SELECT COUNT(*) FROM records WHERE kind='申し送り'").fetchone()[0]
+        check("同じサイトからのPOSTは受ける", st in (200, 303) and n3 == n2 + 1, "HTTP %d・%d件" % (st, n3))
     finally:
         srv.shutdown()
         srv.server_close()

@@ -63,6 +63,26 @@ COOKIE = "castle_session"
 FLOW_COOKIE = "castle_flow"
 LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
 
+# 画面に必ず付ける防御ヘッダ。外部の読み込みはゼロなので、自分の中だけに閉じる。
+SECURITY_HEADERS = (
+    ("X-Content-Type-Options", "nosniff"),
+    ("X-Frame-Options", "DENY"),
+    ("Referrer-Policy", "no-referrer"),
+    ("Cache-Control", "no-store"),
+    ("Content-Security-Policy",
+     "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+     "img-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; "
+     "base-uri 'none'; object-src 'none'"),
+)
+
+
+def host_name(value):
+    """Host ヘッダから名前だけを取り出す（ポートを除く。[::1]:8765 も扱う）。"""
+    v = (value or "").strip().lower()
+    if v.startswith("["):
+        return v[1:].split("]")[0]
+    return v.rsplit(":", 1)[0] if v.count(":") == 1 else v
+
 
 def _sign_in_with_google(instance, cfg, code, redirect_uri, verifier, nonce, opener=None):
     """引換券をIDトークンに換え、署名を確かめ、名簿を引く。**3つそろって初めて入れる。**
@@ -409,10 +429,29 @@ def make_server(instance, port=8765, host="127.0.0.1"):
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(data)))
+            for name, value in SECURITY_HEADERS:
+                self.send_header(name, value)
             if cookie:
                 self.send_header("Set-Cookie", cookie)
             self.end_headers()
             self.wfile.write(data)
+
+        def _host_ok(self):
+            """127.0.0.1 に閉じている時は、Host が自分の名前の要求だけ受ける。
+            別のサイトが名前だけ自分のものにして、こちらの画面を読みに来る手（DNS rebinding）を断つ。
+            外に開く時（--host が外）は、利用者の登録が門になっているので、ここでは見ない。"""
+            if host not in LOCAL_HOSTS:
+                return True
+            return host_name(self.headers.get("Host")) in LOCAL_HOSTS
+
+        def _same_origin(self):
+            """別のサイトのページから飛んできたPOSTを断る。Origin があれば Host と同じ時だけ。"""
+            if self.headers.get("Sec-Fetch-Site") not in (None, "", "same-origin", "none"):
+                return False
+            origin = self.headers.get("Origin")
+            if not origin or origin == "null":
+                return origin != "null"
+            return urllib.parse.urlparse(origin).netloc.lower() == (self.headers.get("Host") or "").lower()
 
         def _identity(self):
             """鍵から本人を引く。認証が入っていなければ None（＝名乗りに戻る）。"""
@@ -480,6 +519,8 @@ def make_server(instance, port=8765, host="127.0.0.1"):
             return parts if len(parts) == 3 else None
 
         def do_GET(self):
+            if not self._host_ok():
+                return self._send("<h1>403</h1>", 403)
             path = urllib.parse.urlparse(self.path).path
             conn = db.connect(instance)
             try:
@@ -563,6 +604,8 @@ def make_server(instance, port=8765, host="127.0.0.1"):
                 conn.close()
 
         def do_POST(self):
+            if not self._host_ok() or not self._same_origin():
+                return self._send("<h1>403</h1>", 403)
             path = urllib.parse.urlparse(self.path).path
             if path not in ("/note", "/login", "/knowledge"):
                 return self._send("<h1>404</h1>", 404)
