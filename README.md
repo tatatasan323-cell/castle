@@ -274,3 +274,5 @@ python castle/app/backup.py --mirror "D:\castle-backup"
 - **HTTPSではない。** 社内網に出すならプロキシでHTTPSを終端すること。`--expose` はその点を承知したという合図でしかない
 - **鍵を貸し借りされたら分からない。** 記録に残るのは鍵の持ち主。技術的には防げないので、ログイン画面にその旨を書いてある
 - **閲覧のログは取っていない。** 書き込みは `records.created_by` で追える。見ただけの記録は取らない
+
+制作：[AI内製化工房 MITA](https://ai-naiseika.github.io/)
