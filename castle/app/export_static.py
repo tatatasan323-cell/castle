@@ -38,11 +38,29 @@ NOTICE = (
 
 FORM_FIELDS = re.compile(r"<(input|select|textarea|button)\b")
 
+# 公開した見本の顔：スマホのホーム画面のアイコンと、LINE などでリンクに添える絵（OGP）。
+# 絵と manifest は docs/ の直下に置いてある（書き出しでは作らない・消さない）。2026-11-17
+FACE = "\n".join([
+    '<link rel="icon" href="favicon.png" type="image/png" sizes="64x64">',
+    '<link rel="apple-touch-icon" href="apple-touch-icon.png">',
+    '<link rel="manifest" href="manifest.webmanifest">',
+    '<meta name="theme-color" content="#05080c">',
+    '<meta name="apple-mobile-web-app-title" content="城">',
+    '<meta property="og:type" content="website">',
+    '<meta property="og:title" content="城 ─ 経営者の一枚画面（見本）">',
+    '<meta property="og:description" content="経営の数字を1枚の画面で見る「城」の見本です。会社も数字も、すべて架空です。">',
+    '<meta property="og:image" content="https://tatatasan323-cell.github.io/castle/ogp.jpg">',
+    '<meta property="og:image:width" content="1200">',
+    '<meta property="og:image:height" content="630">',
+    '<meta name="twitter:card" content="summary_large_image">',
+]) + "\n"
+
 
 def flatten(page, read_only):
     """リンクを静的ファイルへ差し替え、書き込みの口を閉じる。"""
     for old, new in LINKS.items():
         page = page.replace(old, new)
+    page = page.replace("</head>", FACE + "</head>", 1)
     # 閉じるボタンは静的版に意味がない。残すと「押しても何も起きない」になる。
     page = re.sub(r'<a href="/logout">[^<]*</a>', "", page)
     # 覆す・絞り込むのリンクはサーバが要る。押しても何も起きないものは外す。
